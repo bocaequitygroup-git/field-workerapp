@@ -365,11 +365,12 @@ async function resumeS(id){
  if(!r.ok){st.err=r.error||('Could not resume that task ('+(r.code||'error')+').');render();return;}
  localUpdate(id,{status:'active',pausedAt:null,pauseType:'',totalPausedMs:(s.totalPausedMs||0)+(Date.now()-s.pausedAt)});render();
 }
-function openComplete(id){st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;render();}
+function openComplete(id){st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain=true;render();}
 async function confirmComplete(id){
  const s=st.sessions.find(x=>x.id===id);if(!s||st.busy)return;
  st.busy=true;st.err=null;render();
- const r=await api('end-activity',{sessionId:id,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal});
+ if(s.activityId==='ACT_018'&&!(Number(st.qty)>0)){st.busy=false;st.err='Enter how much was harvested before finishing.';render();return;}
+ const r=await api('end-activity',{sessionId:id,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?!!st.coldChain:undefined});
  st.busy=false;
  if(handleAuthError(r))return;
  if(!r.ok){st.err=r.error||('Could not complete that task ('+(r.code||'error')+').');render();return;}
@@ -445,6 +446,7 @@ function renderHome(){
         <button class="btn block" ${st.busy?'disabled':''} onclick="confirmStartAssigned('${s.id}','${esc(s.bedId)}','${esc(s.activityName)}')">${st.busy?'Starting…':'Start'}</button>
       </div>`:completing?`
       ${s.qtyBased?`<label>Quantity (${esc(s.unit)})</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:''}
+      ${s.activityId==='ACT_018'?`<label style="margin-top:8px;">Grade</label><select onchange="st.grade=this.value"><option value="" ${!st.grade?'selected':''}>Not graded</option>${['A','B','C','Cull'].map(g=>`<option value="${g}" ${st.grade===g?'selected':''}>${g}</option>`).join('')}</select><div class="chk"><input type="checkbox" id="ccChk" ${st.coldChain?'checked':''} onchange="st.coldChain=this.checked"><label for="ccChk" style="margin:0;">Cold chain OK (kept cool and shaded)</label></div>`:''}
       ${s.activityId==='ACT_018'?`<div class="chk"><input type="checkbox" id="finalChk" ${st.isFinal?'checked':''} onchange="st.isFinal=this.checked"><label for="finalChk" style="margin:0;">Final harvest for this cohort</label></div>`:''}
       <label style="margin-top:8px;">Notes (optional)</label><input type="text" value="${esc(st.notes)}" oninput="st.notes=this.value">
       <div class="row">
