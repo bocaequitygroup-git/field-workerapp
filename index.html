@@ -237,12 +237,16 @@ function mapServerSession_(r){
 let tickTimer=null;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
  sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,completingId:null,qty:'',unit:'',notes:'',isFinal:false,
- pausingId:null,pauseReason:''};
+ pausingId:null,pauseReason:'',startingId:null};
 
 const PAUSE_TYPES=['Break','Lunch','End of Day'];
 
+/* Login is kept per TAB (sessionStorage), not per browser (localStorage): a new tab or window now opens on the
+   login screen, and two tabs can be signed in as different workers without overwriting each other. A refresh in the
+   same tab keeps you signed in. The old localStorage copy is deleted so nobody is auto-logged-in from it. */
+try{localStorage.removeItem('vpos_session');}catch(e){}
 try{
- const sess=JSON.parse(localStorage.getItem('vpos_session')||'null');
+ const sess=JSON.parse(sessionStorage.getItem('vpos_session')||'null');
  if(sess&&sess.token&&sess.me){st.me=sess.me;st.token=sess.token;st.screen='home';st.connected=true;}
 }catch(e){}
 function loadForMe(){st.sessions=allSessions().filter(s=>s.workerId===st.me.workerId).sort((a,b)=>b.startTime-a.startTime);}
@@ -280,13 +284,13 @@ async function attemptLogin(){
  if(!r.ok){st.err=r.error||'Login failed.';render();return;}
  st.me={workerId:r.data.workerId,name:r.data.name,role:r.data.role};
  st.token=r.data.token;
- localStorage.setItem('vpos_session',JSON.stringify({me:st.me,token:st.token}));
+ try{sessionStorage.setItem('vpos_session',JSON.stringify({me:st.me,token:st.token}));}catch(e){}
  st.workerIdInput='';st.pinInput='';
  loadForMe();go('home');syncActiveSessions_();
 }
 function doLogout(callServer){
  if(callServer!==false && st.token) api('logout',{device:(navigator.userAgent||'').slice(0,100)});
- localStorage.removeItem('vpos_session');st.me=null;st.token=null;st.sessions=[];go('login');
+ try{sessionStorage.removeItem('vpos_session');localStorage.removeItem('vpos_session');}catch(e){}st.me=null;st.token=null;st.sessions=[];go('login');
 }
 
 function startNewTask(){st.scanQuery='';st.selBed=null;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('scan');}
@@ -330,13 +334,15 @@ async function quickStart(id){
  *  fresh syncActiveSessions_() after the call picks up its new ACTIVE state
  *  and real Start_Time. */
 async function confirmStartAssigned(id,bedId,activityName){
- if(st.busy)return;
- st.busy=true;st.err=null;render();
+ if(st.busy||st.startingId)return;
+ st.startingId=id;st.err=null;render();     // only THIS card shows "Starting..." - the other Start buttons stay normal
  const r=await api('start-activity',{bedId,activityName});
- st.busy=false;
+ st.startingId=null;
  if(handleAuthError(r))return;
  if(!r.ok){st.err=r.error||('Could not start that activity ('+(r.code||'error')+').');render();return;}
- syncActiveSessions_();
+ const cur=st.sessions.find(x=>x.id===id);   // show it running right away; the sync below brings the real Start_Time
+ if(cur){cur.status='active';cur.startTime=Date.now();cur.totalPausedMs=0;cur.pausedAt=null;}
+ render();syncActiveSessions_();
 }
 /** Patches session `id` in st.sessions directly, so the change shows immediately,
  *  then mirrors it into the local completed-history cache. Most active/paused sessions
@@ -457,7 +463,7 @@ function renderHome(){
       <div class="timer" id="timer-${s.id}" style="text-align:right;">${assigned?'Not started':fmt(elapsed(s))}</div></div>
     ${assigned?`
       <div class="row">
-        <button class="btn block" ${st.busy?'disabled':''} onclick="confirmStartAssigned('${s.id}','${esc(s.bedId)}','${esc(s.activityName)}')">${st.busy?'Starting…':'Start'}</button>
+        <button class="btn block" ${st.startingId===s.id?'disabled':''} onclick="confirmStartAssigned('${s.id}','${esc(s.bedId)}','${esc(s.activityName)}')">${st.startingId===s.id?'Starting…':'Start'}</button>
       </div>`:completing?`
       ${s.qtyBased?`<label>Quantity (${esc(s.unit)})</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:''}
       ${s.activityId==='ACT_018'?`<label style="margin-top:8px;">Grade</label><select onchange="st.grade=this.value"><option value="" ${!st.grade?'selected':''}>Not graded</option>${['A','B','C','Cull'].map(g=>`<option value="${g}" ${st.grade===g?'selected':''}>${g}</option>`).join('')}</select><div class="chk"><input type="checkbox" id="ccChk" ${st.coldChain?'checked':''} onchange="st.coldChain=this.checked"><label for="ccChk" style="margin:0;">Cold chain OK (kept cool and shaded)</label></div>`:''}
