@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>VPOS Field App</title>
 <style>
-:root{--bg:#f4f3ee;--card:#ffffff;--text:#1c1e1a;--sub:#6c6f66;--accent:#2f6b3c;--accent-d:#245430;--warn:#c1531f;--border:#e2ded2;--radius:14px;}
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14170f;--card:#1e2318;--text:#eceae2;--sub:#9a9c8f;--border:#33372a;}}
-:root[data-theme="dark"]{--bg:#14170f;--card:#1e2318;--text:#eceae2;--sub:#9a9c8f;--border:#33372a;}
+:root{--bg:#f4f3ee;--card:#ffffff;--text:#1c1e1a;--sub:#6c6f66;--accent:#2f6b3c;--accent-d:#245430;--warn:#c1531f;--border:#e2ded2;--radius:14px;--c-by:#1d5fa8;--c-date:#7b3fa0;--c-re:#c1531f;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14170f;--card:#1e2318;--text:#eceae2;--sub:#9a9c8f;--border:#33372a;--c-by:#7db4ee;--c-date:#c8a2ea;--c-re:#f2a373;}}
+:root[data-theme="dark"]{--bg:#14170f;--card:#1e2318;--text:#eceae2;--sub:#9a9c8f;--border:#33372a;--c-by:#7db4ee;--c-date:#c8a2ea;--c-re:#f2a373;}
 *{box-sizing:border-box;}
 body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Arial,sans-serif;min-height:100vh;
 padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
@@ -26,6 +26,9 @@ label{font-size:13px;color:var(--sub);display:block;margin-bottom:4px;}
 .btn[disabled]{opacity:.45;pointer-events:none;}
 input[type=text],input[type=password],input[type=number]{width:100%;padding:13px;border-radius:var(--radius);border:1.5px solid var(--border);font-size:16px;background:var(--bg);color:var(--text);}
 .sub{color:var(--sub);font-size:13px;}
+.sub.by{color:var(--c-by);font-weight:600;}   /* Assigned by   */
+.sub.dt{color:var(--c-date);font-weight:600;} /* Date assigned */
+.sub.re{color:var(--c-re);font-weight:600;}   /* Reassigned    */
 .center{text-align:center;}
 .timer{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;}
 .row{display:flex;gap:8px;margin-top:8px;}
@@ -149,6 +152,8 @@ function bedDetail(id){
 }
 function fmt(ms){if(ms<0)ms=0;let s=Math.floor(ms/1000);const h=Math.floor(s/3600);s-=h*3600;const m=Math.floor(s/60);s-=m*60;
 return(h>0?String(h).padStart(2,'0')+':':'')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}
+/** Date/time a manager assigned the task (FIELD_LIVE_SESSION.Assigned_Time), e.g. "Oct 26, 2026, 10:50 AM". Blank when none. */
+function fmtAssigned_(v){ if(!v)return ''; const d=new Date(v); if(isNaN(d.getTime()))return String(v); return d.toLocaleString([],{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}); }
 function elapsed(s){const paused=s.totalPausedMs||0;if(s.status==='paused')return s.pausedAt-s.startTime-paused;
 if(s.status==='completed')return s.endTime-s.startTime-paused;return Date.now()-s.startTime-paused;}
 function esc(t){return String(t==null?'':t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -220,6 +225,7 @@ function mapServerSession_(r){
   // Set only when a manager assigned/reassigned this session (worker self-started
   // tasks have no Manager_ID) - see reassignActivity()/get-my-sessions in the backend.
   managerName:r.Manager_Name||'', reassignedFromName:r.Reassigned_From_Name||r.Reassigned_From||'',
+  assignedTime:r.Assigned_Time||r.assignedTime||'',
   // FIX: "My Active Sessions" only ever showed the bare Activity_Name label (e.g.
   // "Mulching") with nothing explaining what the activity actually is. Server now
   // joins ACTIVITY_REFERENCE.Description onto get-my-sessions rows the same way it
@@ -248,8 +254,15 @@ async function syncActiveSessions_(){
  const r=await api('get-my-sessions',{});
  if(handleAuthError(r))return;
  if(!r.ok){st.err=r.error||'Could not refresh your sessions.';render();return;}
- const serverActive=(r.data||[]).map(mapServerSession_);
  const localCompleted=allSessions().filter(s=>s.workerId===st.me.workerId&&s.status==='completed');
+ // FIX: get-my-sessions can still return a row that is already finished (workbook says COMPLETED), and this
+ // mapper used to turn anything that was not PAUSED/ASSIGNED into 'active' - so a task you just completed
+ // came straight back as a running card (timer counting from its start time) next to its Completed History
+ // entry. Closed rows are dropped here, and so is any session this device has already completed, in case the
+ // server answers a moment before it has caught up.
+ const CLOSED_=/^(COMPLETED|COMPLETE|ENDED|CLOSED|CANCELLED|CANCELED|REASSIGNED|ABANDONED)$/;
+ const doneIds={};localCompleted.forEach(x=>{doneIds[x.id]=1;});
+ const serverActive=(r.data||[]).filter(x=>!CLOSED_.test(String(x.Status||'').trim().toUpperCase())&&!String(x.End_Time||'').trim()&&!doneIds[x.Session_ID]).map(mapServerSession_);
  st.sessions=serverActive.concat(localCompleted).sort((a,b)=>b.startTime-a.startTime);
  render();
 }
@@ -438,8 +451,9 @@ function renderHome(){
       <div style="font-weight:700;margin-top:6px;">${esc(s.bedId)} · ${esc(s.block)}</div>
       <div class="sub">${esc(s.activityName)}</div>
       ${s.description?`<div class="sub">${esc(s.description)}</div>`:''}
-      ${s.reassignedFromName?`<div class="sub">↩ Reassigned from ${esc(s.reassignedFromName)}${s.managerName?' by '+esc(s.managerName):''}</div>`
-        :s.managerName?`<div class="sub">Assigned by ${esc(s.managerName)}</div>`:''}</div>
+      ${s.reassignedFromName?`<div class="sub re">↩ Reassigned from ${esc(s.reassignedFromName)}${s.managerName?' by '+esc(s.managerName):''}</div>`
+        :s.managerName?`<div class="sub by">Assigned by ${esc(s.managerName)}</div>`:''}
+      ${fmtAssigned_(s.assignedTime)?`<div class="sub dt">Date assigned: ${esc(fmtAssigned_(s.assignedTime))}</div>`:''}</div>
       <div class="timer" id="timer-${s.id}" style="text-align:right;">${assigned?'Not started':fmt(elapsed(s))}</div></div>
     ${assigned?`
       <div class="row">
