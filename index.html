@@ -303,11 +303,14 @@ function processScan(){
 function selectBed(id){st.selBed=id;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('assignment');}
 function selectAct(id){st.selAct=actById(id);render();}
 
-async function confirmStart(){
- if(!st.selBed||!st.selAct||st.busy)return;
- st.busy=true;st.err=null;render();
+async function confirmStart(src){
+ if(st.startingId||st.busy)return;
+ if(!st.selBed)return;
+ if(!st.selAct){st.err='Choose a Field Action or an activity first.';st.showAllActs=true;render();return;}
+ st.startingId=(typeof src==='string'?src:'task');   // only the button that was pressed shows "Starting..."; the rest stay normal
+ st.err=null;render();
  const r=await api('start-activity',{bedId:st.selBed,activityName:st.selAct.name});
- st.busy=false;
+ st.startingId=null;
  if(handleAuthError(r))return;
  if(!r.ok){st.err=r.error||('Could not start that activity ('+(r.code||'error')+').');render();return;}
  const arr=allSessions();
@@ -317,9 +320,9 @@ async function confirmStart(){
  saveSessions(arr);loadForMe();go('home');syncActiveSessions_();
 }
 async function quickStart(id){
- if(!st.selBed||st.busy)return;
+ if(!st.selBed||st.busy||st.startingId)return;
  st.selAct=actById(id);
- await confirmStart();
+ await confirmStart('q:'+id);
 }
 /** FIX (bug 7 frontend half): starts a session that's sitting here as
  *  'assigned' (manager-assigned or just reassigned to this worker). Reuses
@@ -535,7 +538,7 @@ function renderAssignment(){
  const worker=ACTIVITIES.filter(a=>a.workerExec);
  const quick=QUICK_ACTIONS.map(q=>{
   const a=actById(q.id);if(!a)return'';
-  return `<button class="qa-btn" ${st.busy?'disabled':''} onclick="quickStart('${a.id}')"><span class="qa-icon">${q.icon}</span><span>${esc(q.label)}</span></button>`;
+  return `<button class="qa-btn" ${st.startingId==='q:'+a.id?'disabled':''} onclick="quickStart('${a.id}')"><span class="qa-icon">${st.startingId==='q:'+a.id?'⏳':q.icon}</span><span>${st.startingId==='q:'+a.id?'Starting…':esc(q.label)}</span></button>`;
  }).join('');
  return `${header()}
  <p class="link" onclick="go('scan')" style="margin-top:0;">‹ Cancel / Rescan</p>
@@ -553,7 +556,7 @@ function renderAssignment(){
  <div class="qa-grid">${quick}</div>
  <p class="link" onclick="st.showAllActs=!st.showAllActs;render()">${st.showAllActs?'▾':'▸'} Or Choose Any Activity</p>
  ${st.showAllActs?worker.map(a=>`<button class="act-btn ${st.selAct&&st.selAct.id===a.id?'sel':''}" onclick="selectAct('${a.id}')">${esc(a.name)}</button>`).join(''):''}
- <button class="btn block" style="margin-top:10px;" ${st.selAct&&!st.busy?'':'disabled'} onclick="confirmStart()">${st.busy?'Starting…':'▶ Start Task'}</button>
+ <button class="btn block" style="margin-top:10px;" ${st.startingId==='task'?'disabled':''} onclick="confirmStart('task')">${st.startingId==='task'?'Starting…':(st.selAct?'▶ Start '+esc(st.selAct.name):'▶ Start Task')}</button>
  <button class="btn secondary block" style="margin-top:8px;" onclick="go('scan')">Cancel / Rescan</button>
  <p class="link" onclick="go('home')">‹ Back to My Sessions</p>`;
 }
