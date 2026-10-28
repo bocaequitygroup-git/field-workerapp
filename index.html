@@ -56,6 +56,12 @@ input[type=text],input[type=password],input[type=number]{width:100%;padding:13px
 .qa-icon{font-size:21px;}
 .hist{font-size:13px;color:var(--sub);padding:6px 2px 0;border-top:1px solid var(--border);margin-top:8px;}
 .hist-row{padding:4px 0;}
+.progress{display:flex;align-items:center;justify-content:center;gap:10px;font-weight:700;color:var(--accent);padding:13px;border:1.5px dashed var(--accent);border-radius:var(--radius);margin-top:8px;}
+.spin{width:16px;height:16px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite;}
+@keyframes sp{to{transform:rotate(360deg);}}
+.done-note{display:flex;align-items:center;justify-content:center;gap:8px;font-weight:700;color:#fff;background:var(--accent);padding:13px;border-radius:var(--radius);margin-top:8px;}
+.ok-note{color:var(--accent);font-weight:700;font-size:13px;margin-top:6px;}
+.badge.done{background:var(--accent-d);}
 </style>
 </head>
 <body>
@@ -68,12 +74,15 @@ const APP_KEY='WorkerApp';
 async function api(action,payload){
  payload=Object.assign({action:action},payload||{});
  if(st.token && action!=='login') payload.token=st.token;
+ const ctl=(typeof AbortController!=='undefined')?new AbortController():null;
+ const timer=ctl?setTimeout(()=>ctl.abort(),60000):null;   // never leave a button stuck on a request that will not answer
  try{
-  const res=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)});
+  const res=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),signal:ctl?ctl.signal:undefined});
   const r=await res.json();
   st.connected=true;
   return r;
  }catch(e){ st.connected=false; return {ok:false,error:'Could not reach the server. Check your connection.',code:'NETWORK_ERROR'}; }
+ finally{ if(timer)clearTimeout(timer); }
 }
 /** returns true if it handled (logged the user out) a dead-session error */
 function handleAuthError(r){
@@ -170,6 +179,7 @@ function shortName(n){return(n||'').trim().split(/\s+/)[0]||n;}
    still come from this device's own localStorage - a task completed on a DIFFERENT device
    will not show in Completed History here, only its disappearance from Active Sessions
    (which IS server-truth) will be visible everywhere. */
+function sessSig_(){return JSON.stringify(st.sessions.map(s=>[s.id,s.status,s.pauseType,s.activityName,s.bedId,s.assignedTime,s.managerName,s.reassignedFromName,s.description,Math.round((s.totalPausedMs||0)/1000)]));}
 function allSessions(){try{return JSON.parse(localStorage.getItem('vpos_sessions')||'[]');}catch(e){return[];}}
 function saveSessions(arr){localStorage.setItem('vpos_sessions',JSON.stringify(arr));}
 function actByName(name){return ACTIVITIES.find(a=>a.name===name);}
@@ -235,9 +245,11 @@ function mapServerSession_(r){
 }
 
 let tickTimer=null;
+let syncSeq=0;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
  sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,completingId:null,qty:'',unit:'',notes:'',isFinal:false,
- pausingId:null,pauseReason:'',startingId:null};
+ pausingId:null,pauseReason:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{}};
+const HOLD_MS=60000;   // how long a just-confirmed Start is trusted over a server answer that has not caught up
 
 const PAUSE_TYPES=['Break','Lunch','End of Day'];
 
@@ -253,10 +265,14 @@ function loadForMe(){st.sessions=allSessions().filter(s=>s.workerId===st.me.work
 if(st.me)loadForMe(); // instant paint from local cache; syncActiveSessions_() below reconciles with the server
 
 /** Replaces the active/paused portion of st.sessions with server truth; keeps local completed rows. */
-async function syncActiveSessions_(){
+async function syncActiveSessions_(force){
  if(!st.me)return;
+ const seq=++syncSeq, startedAt=Date.now();
  const r=await api('get-my-sessions',{});
  if(handleAuthError(r))return;
+ // A slow answer that left BEFORE the worker tapped Start/Complete describes the old state. Applying it put the card back to
+ // 'Start' / 'Complete' after the tap had worked, which is why the worker had to tap again. Only the newest, post-tap answer counts.
+ if(seq!==syncSeq||startedAt<st.lastChange)return;
  if(!r.ok){st.err=r.error||'Could not refresh your sessions.';render();return;}
  const localCompleted=allSessions().filter(s=>s.workerId===st.me.workerId&&s.status==='completed');
  // FIX: get-my-sessions can still return a row that is already finished (workbook says COMPLETED), and this
@@ -266,9 +282,23 @@ async function syncActiveSessions_(){
  // server answers a moment before it has caught up.
  const CLOSED_=/^(COMPLETED|COMPLETE|ENDED|CLOSED|CANCELLED|CANCELED|REASSIGNED|ABANDONED)$/;
  const doneIds={};localCompleted.forEach(x=>{doneIds[x.id]=1;});
- const serverActive=(r.data||[]).filter(x=>!CLOSED_.test(String(x.Status||'').trim().toUpperCase())&&!String(x.End_Time||'').trim()&&!doneIds[x.Session_ID]).map(mapServerSession_);
+ let serverActive=(r.data||[]).filter(x=>!CLOSED_.test(String(x.Status||'').trim().toUpperCase())&&!String(x.End_Time||'').trim()&&!doneIds[x.Session_ID]).map(mapServerSession_).map(x=>{ const mid=st.pending[x.id]&&st.sessions.find(c=>c.id===x.id); return mid||x; });   // a card mid-action keeps its on-screen state
+ // A Start the worker already confirmed is trusted for HOLD_MS: if the server still lists it as waiting (or has not listed it yet),
+ // keep it ACTIVE instead of flipping the card back to \"Start\". Once the server agrees, the hold is dropped.
+ const now=Date.now();
+ Object.keys(st.holds).forEach(id=>{
+  const h=st.holds[id];
+  if(!h||now>h.until||doneIds[id]){delete st.holds[id];return;}
+  const i=serverActive.findIndex(x=>x.id===id);
+  if(i<0)serverActive.push(h.session);
+  else if(serverActive[i].status==='assigned')serverActive[i]=Object.assign({},serverActive[i],{status:'active',startTime:h.session.startTime,totalPausedMs:0,pausedAt:null});
+  else delete st.holds[id];
+ });
+ const before=sessSig_();
  st.sessions=serverActive.concat(localCompleted).sort((a,b)=>b.startTime-a.startTime);
- render();
+ // Redraw only when something on screen changed. Rebuilding the page for nothing is what swallowed taps (a tap that lands
+ // while the DOM is replaced never fires) and dropped focus from the Notes/Quantity box.
+ if(force||before!==sessSig_()||st.err)render();
 }
 if(st.me)syncActiveSessions_();
 
@@ -303,21 +333,44 @@ function processScan(){
 function selectBed(id){st.selBed=id;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('assignment');}
 function selectAct(id){st.selAct=actById(id);render();}
 
+/* ---- One tap = one action ---------------------------------------------------------------------
+   Start:    tap Start -> "Starting…" -> session ACTIVE with Pause / Complete.
+   Complete: tap Complete -> "Mark … as complete?" -> Confirm Complete -> "Completing…" -> moved to Completed History.
+   Each session has its own pending state, so one card's action never disables or resets another. If the reply is lost
+   (slow Apps Script, dropped signal) the app asks the server what happened before showing a failure, so a tap that
+   actually worked is never reported as failed and never has to be repeated. */
+function isTransient_(r){return !!r&&!r.ok&&(r.code==='NETWORK_ERROR'||r.code==='SERVER_ERROR');}
+const LIVE_STATUS_=/^(ACTIVE|PAUSED|EXCEPTION)$/;
+async function mySessionRows_(){const r=await api('get-my-sessions',{});return(r&&r.ok&&Array.isArray(r.data))?r.data:null;}
+async function findLiveSession_(bedId,activityName){
+ const rows=await mySessionRows_();if(!rows)return null;
+ return rows.find(x=>x.Bed_ID===bedId&&x.Activity_Name===activityName&&LIVE_STATUS_.test(String(x.Status||'').trim().toUpperCase())&&!String(x.End_Time||'').trim())||null;
+}
+async function sessionIsClosed_(id){
+ const rows=await mySessionRows_();if(!rows)return false;
+ const row=rows.find(x=>x.Session_ID===id);
+ return !row||!LIVE_STATUS_.test(String(row.Status||'').trim().toUpperCase())||!!String(row.End_Time||'').trim();
+}
 async function confirmStart(src){
  if(st.startingId||st.busy)return;
  if(!st.selBed)return;
  if(!st.selAct){st.err='Choose a Field Action or an activity first.';st.showAllActs=true;render();return;}
+ const bedId=st.selBed,act=st.selAct;
  st.startingId=(typeof src==='string'?src:'task');   // only the button that was pressed shows "Starting..."; the rest stay normal
- st.err=null;render();
- const r=await api('start-activity',{bedId:st.selBed,activityName:st.selAct.name});
- st.startingId=null;
- if(handleAuthError(r))return;
+ st.err=null;st.lastChange=Date.now();render();
+ let r=await api('start-activity',{bedId:bedId,activityName:act.name});
+ if(handleAuthError(r)){st.startingId=null;return;}
+ if(isTransient_(r)){const live=await findLiveSession_(bedId,act.name);if(live)r={ok:true,data:{sessionId:live.Session_ID}};}   // it did start; only the reply was lost
+ st.startingId=null;st.lastChange=Date.now();
  if(!r.ok){st.err=r.error||('Could not start that activity ('+(r.code||'error')+').');render();return;}
  const arr=allSessions();
- arr.push({id:r.data.sessionId,workerId:st.me.workerId,bedId:st.selBed,block:bedBlock(st.selBed),
-  activityId:st.selAct.id,activityName:st.selAct.name,qtyBased:st.selAct.qtyBased,unit:st.selAct.unit,
+ if(!arr.some(x=>x.id===r.data.sessionId))arr.push({id:r.data.sessionId,workerId:st.me.workerId,bedId:bedId,block:bedBlock(bedId),
+  activityId:act.id,activityName:act.name,qtyBased:act.qtyBased,unit:act.unit,
   status:'active',startTime:Date.now(),totalPausedMs:0,pausedAt:null});
- saveSessions(arr);loadForMe();go('home');syncActiveSessions_();
+ saveSessions(arr);loadForMe();
+ const made=st.sessions.find(x=>x.id===r.data.sessionId);
+ if(made){st.holds[made.id]={until:Date.now()+HOLD_MS,session:made};st.flash[made.id]='started';setTimeout(()=>{delete st.flash[made.id];if(st.screen==='home')render();},2500);}
+ go('home');syncActiveSessions_();
 }
 async function quickStart(id){
  if(!st.selBed||st.busy||st.startingId)return;
@@ -337,14 +390,19 @@ async function quickStart(id){
  *  fresh syncActiveSessions_() after the call picks up its new ACTIVE state
  *  and real Start_Time. */
 async function confirmStartAssigned(id,bedId,activityName){
- if(st.busy||st.startingId)return;
- st.startingId=id;st.err=null;render();     // only THIS card shows "Starting..." - the other Start buttons stay normal
- const r=await api('start-activity',{bedId,activityName});
- st.startingId=null;
- if(handleAuthError(r))return;
- if(!r.ok){st.err=r.error||('Could not start that activity ('+(r.code||'error')+').');render();return;}
- const cur=st.sessions.find(x=>x.id===id);   // show it running right away; the sync below brings the real Start_Time
- if(cur){cur.status='active';cur.startTime=Date.now();cur.totalPausedMs=0;cur.pausedAt=null;}
+ if(st.pending[id])return;
+ st.pending[id]='starting';delete st.cardErr[id];st.err=null;st.lastChange=Date.now();render();   // only THIS card shows "Starting..."
+ let r=await api('start-activity',{bedId,activityName});
+ if(handleAuthError(r)){delete st.pending[id];return;}
+ if(isTransient_(r)&&await findLiveSession_(bedId,activityName))r={ok:true};   // it did start; only the reply was lost
+ delete st.pending[id];st.lastChange=Date.now();
+ if(!r.ok){st.cardErr[id]=r.error||('Could not start that activity ('+(r.code||'error')+'). Tap Start to try again.');render();return;}
+ const cur=st.sessions.find(x=>x.id===id);   // running right away; the sync below brings the real Start_Time
+ if(cur){
+  cur.status='active';cur.startTime=Date.now();cur.totalPausedMs=0;cur.pausedAt=null;
+  st.holds[id]={until:Date.now()+HOLD_MS,session:Object.assign({},cur)};
+  st.flash[id]='started';setTimeout(()=>{delete st.flash[id];if(st.screen==='home')render();},2500);
+ }
  render();syncActiveSessions_();
 }
 /** Patches session `id` in st.sessions directly, so the change shows immediately,
@@ -355,6 +413,7 @@ async function confirmStartAssigned(id,bedId,activityName){
  *  screen until the next full sync. That's why pause/resume looked like it needed a
  *  refresh to take effect. */
 function localUpdate(id,patch){
+ st.lastChange=Date.now();
  const idx=st.sessions.findIndex(s=>s.id===id);
  if(idx>=0)st.sessions[idx]=Object.assign({},st.sessions[idx],patch);
  const cache=allSessions();
@@ -387,17 +446,23 @@ async function resumeS(id){
  if(!r.ok){st.err=r.error||('Could not resume that task ('+(r.code||'error')+').');render();return;}
  localUpdate(id,{status:'active',pausedAt:null,pauseType:'',totalPausedMs:(s.totalPausedMs||0)+(Date.now()-s.pausedAt)});render();
 }
-function openComplete(id){st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain=true;render();}
+function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain=true;render();}
 async function confirmComplete(id){
- const s=st.sessions.find(x=>x.id===id);if(!s||st.busy)return;
- st.busy=true;st.err=null;render();
- if(s.activityId==='ACT_018'&&!(Number(st.qty)>0)){st.busy=false;st.err='Enter how much was harvested before finishing.';render();return;}
- const r=await api('end-activity',{sessionId:id,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?!!st.coldChain:undefined});
- st.busy=false;
- if(handleAuthError(r))return;
- if(!r.ok){st.err=r.error||('Could not complete that task ('+(r.code||'error')+').');render();return;}
+ const s=st.sessions.find(x=>x.id===id);if(!s||st.pending[id])return;
+ if(s.activityId==='ACT_018'&&!(Number(st.qty)>0)){st.cardErr[id]='Enter how much was harvested before finishing.';render();return;}
+ st.pending[id]='completing';delete st.cardErr[id];st.err=null;st.lastChange=Date.now();render();
+ let r=await api('end-activity',{sessionId:id,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?!!st.coldChain:undefined});
+ if(handleAuthError(r)){delete st.pending[id];return;}
+ // A lost reply, or "not active" because the first tap already closed it: ask the server before calling it a failure.
+ if(isTransient_(r)||(!r.ok&&r.code==='SESSION_NOT_ACTIVE')){if(await sessionIsClosed_(id))r={ok:true};}
+ delete st.pending[id];
+ if(!r.ok){st.cardErr[id]=r.error||('Could not complete that task ('+(r.code||'error')+'). Tap Confirm Complete to try again.');render();return;}
+ delete st.holds[id];
  localUpdate(id,{status:'completed',endTime:Date.now()});
- st.completingId=null;render();syncActiveSessions_();
+ st.completingId=null;
+ st.flash[id]='completed';   // card stays on screen for a moment showing \"Completed\", then moves to Completed History
+ render();syncActiveSessions_();
+ setTimeout(()=>{delete st.flash[id];if(st.screen==='home')render();},1600);
 }
 
 function connPill(){
@@ -433,11 +498,11 @@ function renderHome(){
  // they just fell out of this specific filter, which only ever asked for
  // active/paused. Without this they'd have been invisible here even after
  // mapServerSession_ started tagging them correctly.
- const active=st.sessions.filter(s=>s.status==='active'||s.status==='paused'||s.status==='assigned');
- const done=st.sessions.filter(s=>s.status==='completed').slice(0,15);
+ const active=st.sessions.filter(s=>s.status==='active'||s.status==='paused'||s.status==='assigned'||(s.status==='completed'&&st.flash[s.id]==='completed'));
+ const done=st.sessions.filter(s=>s.status==='completed'&&st.flash[s.id]!=='completed').slice(0,15);
  return `${header()}
  <div class="row" style="margin-bottom:2px;"><h1 style="flex:2;">My Active Sessions</h1>
- <button class="btn secondary" style="flex:1;" onclick="syncActiveSessions_()">Refresh</button></div>
+ <button class="btn secondary" style="flex:1;" onclick="syncActiveSessions_(true)">Refresh</button></div>
  <p class="sub" style="margin:0 0 10px;">Logged in as ${esc(st.me.name)} (${esc(shortName(st.me.name))})</p>
  ${errBanner()}
  ${active.length===0?'<p class="sub">No active tasks right now. Scan a bed to start one.</p>':
@@ -454,9 +519,11 @@ function renderHome(){
     // place (see startActivity() in ActivityEngine.gs), the same one the
     // manager's assignment or reassignment already created.
     const assigned=s.status==='assigned';
+    const justDone=s.status==='completed';
+    const starting=st.pending[s.id]==='starting', completingNow=st.pending[s.id]==='completing';
     return `<div class="card">
     <div class="row" style="margin-bottom:6px;"><div>
-      <span class="badge ${s.status==='paused'?'paused':''}">${assigned?'WAITING':s.status.toUpperCase()}${s.status==='paused'&&s.pauseType?' · '+esc(s.pauseType):''}</span>
+      <span class="badge ${s.status==='paused'?'paused':''}${justDone?'done':''}">${assigned?(starting?'STARTING':'WAITING'):(completingNow?'COMPLETING':s.status.toUpperCase())}${s.status==='paused'&&s.pauseType?' · '+esc(s.pauseType):''}</span>
       <div style="font-weight:700;margin-top:6px;">${esc(s.bedId)} · ${esc(s.block)}</div>
       <div class="sub">${esc(s.activityName)}</div>
       ${s.description?`<div class="sub">${esc(s.description)}</div>`:''}
@@ -464,17 +531,21 @@ function renderHome(){
         :s.managerName?`<div class="sub by">Assigned by ${esc(s.managerName)}</div>`:''}
       ${fmtAssigned_(s.assignedTime)?`<div class="sub dt">Date assigned: ${esc(fmtAssigned_(s.assignedTime))}</div>`:''}</div>
       <div class="timer" id="timer-${s.id}" style="text-align:right;">${assigned?'Not started':fmt(elapsed(s))}</div></div>
-    ${assigned?`
+    ${st.cardErr[s.id]?`<div class="banner">${esc(st.cardErr[s.id])}</div>`:''}
+    ${justDone?`<div class="done-note">✓ Completed</div>`:assigned?(starting?`
+      <div class="progress"><span class="spin"></span>Starting…</div>`:`
       <div class="row">
-        <button class="btn block" ${st.startingId===s.id?'disabled':''} onclick="confirmStartAssigned('${s.id}','${esc(s.bedId)}','${esc(s.activityName)}')">${st.startingId===s.id?'Starting…':'Start'}</button>
-      </div>`:completing?`
+        <button class="btn block" onclick="confirmStartAssigned('${s.id}','${esc(s.bedId)}','${esc(s.activityName)}')">Start</button>
+      </div>`):completingNow?`
+      <div class="progress"><span class="spin"></span>Completing…</div>`:completing?`
+      <div class="sub" style="font-weight:700;margin:2px 0 6px;">Mark ${esc(s.activityName)} on ${esc(s.bedId)} as complete?</div>
       ${s.qtyBased?`<label>Quantity (${esc(s.unit)})</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:''}
       ${s.activityId==='ACT_018'?`<label style="margin-top:8px;">Grade</label><select onchange="st.grade=this.value"><option value="" ${!st.grade?'selected':''}>Not graded</option>${['A','B','C','Cull'].map(g=>`<option value="${g}" ${st.grade===g?'selected':''}>${g}</option>`).join('')}</select><div class="chk"><input type="checkbox" id="ccChk" ${st.coldChain?'checked':''} onchange="st.coldChain=this.checked"><label for="ccChk" style="margin:0;">Cold chain OK (kept cool and shaded)</label></div>`:''}
       ${s.activityId==='ACT_018'?`<div class="chk"><input type="checkbox" id="finalChk" ${st.isFinal?'checked':''} onchange="st.isFinal=this.checked"><label for="finalChk" style="margin:0;">Final harvest for this cohort</label></div>`:''}
       <label style="margin-top:8px;">Notes (optional)</label><input type="text" value="${esc(st.notes)}" oninput="st.notes=this.value">
       <div class="row">
         <button class="btn secondary" onclick="st.completingId=null;render()">Cancel</button>
-        <button class="btn warn" ${st.busy?'disabled':''} onclick="confirmComplete('${s.id}')">${st.busy?'Saving…':'Confirm Complete'}</button>
+        <button class="btn warn" onclick="confirmComplete('${s.id}')">Confirm Complete</button>
       </div>`:pausing?`
       <label style="margin-top:8px;">Pause type</label>
       <div class="row" style="flex-wrap:wrap;gap:6px;">
@@ -484,6 +555,7 @@ function renderHome(){
         <button class="btn secondary" ${st.busy?'disabled':''} onclick="cancelPause()">Cancel</button>
         <button class="btn secondary" ${st.busy||!st.pauseReason?'disabled':''} onclick="confirmPause('${s.id}')">${st.busy?'Pausing…':'Confirm Pause'}</button>
       </div>`:`
+      ${st.flash[s.id]==='started'&&s.status==='active'?'<div class="ok-note">✓ Started - timer running</div>':''}
       <div class="row">
         ${s.status==='active'?`<button class="btn secondary" ${st.busy?'disabled':''} onclick="openPause('${s.id}')">Pause</button>`
           :`<button class="btn secondary" ${st.busy?'disabled':''} onclick="resumeS('${s.id}')">${st.busy?'Resuming…':'Resume'}</button>`}
@@ -556,7 +628,7 @@ function renderAssignment(){
  <div class="qa-grid">${quick}</div>
  <p class="link" onclick="st.showAllActs=!st.showAllActs;render()">${st.showAllActs?'▾':'▸'} Or Choose Any Activity</p>
  ${st.showAllActs?worker.map(a=>`<button class="act-btn ${st.selAct&&st.selAct.id===a.id?'sel':''}" onclick="selectAct('${a.id}')">${esc(a.name)}</button>`).join(''):''}
- <button class="btn block" style="margin-top:10px;" ${st.startingId==='task'?'disabled':''} onclick="confirmStart('task')">${st.startingId==='task'?'Starting…':(st.selAct?'▶ Start '+esc(st.selAct.name):'▶ Start Task')}</button>
+ ${st.startingId==='task'?'<div class="progress"><span class="spin"></span>Starting…</div>':`<button class="btn block" style="margin-top:10px;" ${st.startingId?'disabled':''} onclick="confirmStart('task')">${st.selAct?'▶ Start '+esc(st.selAct.name):'▶ Start Task'}</button>`}
  <button class="btn secondary block" style="margin-top:8px;" onclick="go('scan')">Cancel / Rescan</button>
  <p class="link" onclick="go('home')">‹ Back to My Sessions</p>`;
 }
