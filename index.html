@@ -62,6 +62,25 @@ input[type=text],input[type=password],input[type=number]{width:100%;padding:13px
 .done-note{display:flex;align-items:center;justify-content:center;gap:8px;font-weight:700;color:#fff;background:var(--accent);padding:13px;border-radius:var(--radius);margin-top:8px;}
 .ok-note{color:var(--accent);font-weight:700;font-size:13px;margin-top:6px;}
 .badge.done{background:var(--accent-d);}
+.statusrow{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;}
+.statusrow .conn-pill{margin-bottom:0;}
+.clock{text-align:right;line-height:1.15;}
+.clock .t{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;}
+.clock .d{font-size:11px;color:var(--sub);}
+.tabs{display:flex;gap:4px;background:var(--border);padding:4px;border-radius:var(--radius);margin-bottom:12px;}
+.tab{flex:1;text-align:center;padding:10px 6px;border-radius:calc(var(--radius) - 4px);font-size:14px;font-weight:700;color:var(--sub);cursor:pointer;}
+.tab.on{background:var(--card);color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.12);}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+.chip{padding:8px 14px;border-radius:20px;border:1.5px solid var(--border);background:var(--card);color:var(--text);font-size:13px;font-weight:700;cursor:pointer;}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+select{width:100%;padding:12px;border-radius:var(--radius);border:1.5px solid var(--border);font-size:15px;background:var(--bg);color:var(--text);}
+.filters{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;}
+.filters .full{grid-column:1/-1;}
+.logsum{display:flex;justify-content:space-between;align-items:baseline;margin:12px 2px 6px;font-size:13px;color:var(--sub);}
+.logsum b{color:var(--text);}
+.dayhead{display:flex;justify-content:space-between;font-size:13px;font-weight:700;color:var(--sub);margin:14px 2px 6px;}
+.logrow{display:flex;justify-content:space-between;align-items:center;gap:10px;}
+.logdur{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;}
 </style>
 </head>
 <body>
@@ -247,7 +266,7 @@ function mapServerSession_(r){
 let tickTimer=null;
 let syncSeq=0;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
- sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,completingId:null,qty:'',unit:'',notes:'',isFinal:false,
+ sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,
  pausingId:null,pauseReason:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{}};
 const HOLD_MS=60000;   // how long a just-confirmed Start is trusted over a server answer that has not caught up
 
@@ -470,7 +489,7 @@ function connPill(){
 }
 function header(){
  if(!st.me)return'';
- return `${connPill()}
+ return `<div class="statusrow">${connPill()}<div class="clock"><div class="t" data-clock="t">${clockT_()}</div><div class="d" data-clock="d">${clockD_()}</div></div></div>
  <div class="topbar"><div><div class="name">${esc(st.me.name)}</div><div class="role">${esc(st.me.role)}</div></div>
  <button class="btn secondary" onclick="doLogout()">Log Out</button></div>`;
 }
@@ -491,6 +510,86 @@ function renderLogin(){
  </div>`;
 }
 
+/* ---- Live clock (patched in place every second, so it never rebuilds the page or steals focus) ---- */
+function clockT_(){return new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit',second:'2-digit'});}
+function clockD_(){return new Date().toLocaleDateString([],{weekday:'short',month:'short',day:'numeric',year:'numeric'});}
+function tickClock_(){
+ const t=document.querySelectorAll('[data-clock="t"]'),d=document.querySelectorAll('[data-clock="d"]');
+ if(t.length){const a=clockT_(),b=clockD_();t.forEach(e=>{e.textContent=a;});d.forEach(e=>{e.textContent=b;});}
+}
+setInterval(tickClock_,1000);
+
+/* ---- Tabs ---- */
+function tabsHtml_(active){
+ const n=st.sessions.filter(s=>s.status==='completed'&&st.flash[s.id]!=='completed').length;
+ return `<div class="tabs">
+  <div class="tab ${active==='home'?'on':''}" onclick="go('home')">Sessions</div>
+  <div class="tab ${active==='log'?'on':''}" onclick="go('log')">Log${n?' ('+n+')':''}</div></div>`;
+}
+
+/* ---- Log tab: completed tasks, filtered ---- */
+function doneRows_(){return st.sessions.filter(s=>s.status==='completed'&&st.flash[s.id]!=='completed');}
+function endOf_(s){return s.endTime||s.startTime||0;}
+function dayKey_(ms){const d=new Date(ms);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function dayLabel_(ms){
+ const k=dayKey_(ms),today=new Date(),y=new Date();y.setDate(y.getDate()-1);
+ if(k===dayKey_(today.getTime()))return 'Today';
+ if(k===dayKey_(y.getTime()))return 'Yesterday';
+ return new Date(ms).toLocaleDateString([],{weekday:'short',month:'short',day:'numeric',year:'numeric'});
+}
+function timeOf_(ms){return ms?new Date(ms).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'';}
+function filteredLog_(){
+ const now=new Date();let from=0;
+ if(st.logRange==='today'){from=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();}
+ else if(st.logRange==='7d'){from=Date.now()-7*86400000;}
+ const q=(st.logQuery||'').trim().toUpperCase();
+ return doneRows_().filter(s=>endOf_(s)>=from
+   &&(!st.logAct||s.activityName===st.logAct)
+   &&(!st.logBlock||s.block===st.logBlock)
+   &&(!q||String(s.bedId).toUpperCase().includes(q)))
+  .sort((a,b)=>endOf_(b)-endOf_(a));
+}
+function logListHtml_(){
+ const rows=filteredLog_();
+ if(!rows.length)return `<p class="sub" style="margin-top:14px;">${doneRows_().length?'No completed tasks match these filters.':'No completed tasks yet.'}</p>`;
+ const total=rows.reduce((a,s)=>a+Math.max(0,elapsed(s)),0);
+ let out=`<div class="logsum"><span><b>${rows.length}</b> task${rows.length===1?'':'s'}</span><span>Total time <b>${fmt(total)}</b></span></div>`;
+ const groups={},order=[];
+ rows.forEach(s=>{const k=dayKey_(endOf_(s));if(!groups[k]){groups[k]=[];order.push(k);}groups[k].push(s);});
+ order.forEach(k=>{
+  const g=groups[k],t=g.reduce((a,s)=>a+Math.max(0,elapsed(s)),0);
+  out+=`<div class="dayhead"><span>${esc(dayLabel_(endOf_(g[0])))}</span><span>${g.length} · ${fmt(t)}</span></div>`;
+  out+=g.map(s=>`<div class="card"><div class="logrow"><div>
+    <div style="font-weight:700;">${esc(s.bedId)} · ${esc(s.block)}</div>
+    <div class="sub">${esc(s.activityName)}</div>
+    <div class="sub">${esc(timeOf_(s.startTime))} – ${esc(timeOf_(s.endTime))}</div></div>
+    <div class="logdur">${fmt(elapsed(s))}</div></div></div>`).join('');
+ });
+ return out;
+}
+function onLogQuery(v){st.logQuery=v;const el=document.getElementById('logList');if(el)el.innerHTML=logListHtml_();}
+function setLog_(k,v){st[k]=v;render();}
+function renderLog(){
+ const rows=doneRows_();
+ const acts=Array.from(new Set(rows.map(s=>s.activityName).filter(Boolean))).sort();
+ const blocks=Array.from(new Set(rows.map(s=>s.block).filter(Boolean))).sort();
+ const chip=(k,l)=>`<button class="chip ${st.logRange===k?'on':''}" onclick="setLog_('logRange','${k}')">${l}</button>`;
+ const opt=(v,cur,l)=>`<option value="${esc(v)}" ${cur===v?'selected':''}>${esc(l)}</option>`;
+ return `${header()}
+ ${tabsHtml_('log')}
+ <div class="row" style="margin-bottom:2px;"><h1 style="flex:2;">Completed Log</h1>
+  <button class="btn secondary" style="flex:1;" onclick="syncActiveSessions_(true)">Refresh</button></div>
+ ${errBanner()}
+ <div class="chips">${chip('today','Today')}${chip('7d','Last 7 days')}${chip('all','All')}</div>
+ <div class="filters">
+  <select onchange="setLog_('logAct',this.value)">${opt('',st.logAct,'All activities')}${acts.map(a=>opt(a,st.logAct,a)).join('')}</select>
+  <select onchange="setLog_('logBlock',this.value)">${opt('',st.logBlock,'All blocks')}${blocks.map(b=>opt(b,st.logBlock,b)).join('')}</select>
+  <input class="full" type="text" placeholder="Filter by bed, e.g. B1-01" value="${esc(st.logQuery)}" oninput="onLogQuery(this.value)">
+ </div>
+ <div id="logList">${logListHtml_()}</div>
+ <p class="link" onclick="go('home')">‹ Back to My Sessions</p>`;
+}
+
 function renderHome(){
  // FIX (bug 7 frontend half): 'assigned' sessions (manager-assigned or just
  // reassigned to this worker, not yet started) belong on this list too - they
@@ -499,8 +598,8 @@ function renderHome(){
  // active/paused. Without this they'd have been invisible here even after
  // mapServerSession_ started tagging them correctly.
  const active=st.sessions.filter(s=>s.status==='active'||s.status==='paused'||s.status==='assigned'||(s.status==='completed'&&st.flash[s.id]==='completed'));
- const done=st.sessions.filter(s=>s.status==='completed'&&st.flash[s.id]!=='completed').slice(0,15);
- return `${header()}
+  return `${header()}
+ ${tabsHtml_('home')}
  <div class="row" style="margin-bottom:2px;"><h1 style="flex:2;">My Active Sessions</h1>
  <button class="btn secondary" style="flex:1;" onclick="syncActiveSessions_(true)">Refresh</button></div>
  <p class="sub" style="margin:0 0 10px;">Logged in as ${esc(st.me.name)} (${esc(shortName(st.me.name))})</p>
@@ -562,13 +661,7 @@ function renderHome(){
         <button class="btn warn" onclick="openComplete('${s.id}')">Complete</button>
       </div>`}
     </div>`;}).join('')}
- <button class="btn block" style="margin:14px 0;" onclick="startNewTask()">+ Start New Task</button>
- <h1>Completed History</h1>
- ${done.length===0?'<p class="sub">No completed tasks yet.</p>':
-  done.map(s=>`<div class="card"><div class="row"><div>
-    <div style="font-weight:700;">${esc(s.bedId)} · ${esc(s.block)}</div>
-    <div class="sub">${esc(s.activityName)} · ${new Date(s.startTime).toLocaleDateString()}</div></div>
-    <div class="timer" style="text-align:right;font-size:18px;">${fmt(elapsed(s))}</div></div></div>`).join('')}`;
+ <button class="btn block" style="margin:14px 0;" onclick="startNewTask()">+ Start New Task</button>`;
 }
 
 function bedResultsHtml(){
@@ -652,6 +745,7 @@ function render(){
  const el=document.getElementById('app');
  if(st.screen==='login')el.innerHTML=renderLogin();
  else if(st.screen==='home')el.innerHTML=renderHome();
+ else if(st.screen==='log')el.innerHTML=renderLog();
  else if(st.screen==='scan')el.innerHTML=renderScan();
  else if(st.screen==='assignment')el.innerHTML=renderAssignment();
  if(tickTimer)clearInterval(tickTimer);
