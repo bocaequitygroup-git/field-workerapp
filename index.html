@@ -252,7 +252,7 @@ function mapServerSession_(r){
  const ps=pauseState_(r['Pause_Time(s)'],r['Resume_Time(s)'],isPaused);
  return {
   id:r.Session_ID, workerId:st.me.workerId, bedId:r.Bed_ID, block:bedBlock(r.Bed_ID),
-  activityId:a.id||'', activityName:r.Activity_Name||'', qtyBased:!!a.qtyBased, unit:a.unit||'',
+  activityId:a.id||'', activityName:r.Activity_Name||'', qtyBased:!!a.qtyBased, unit:a.unit||'', isFertilizer:r.Is_Fertilizer===true,
   // An EXCEPTION row is still an open session, so it still renders as 'active'
   // rather than disappearing (only ACTIVE/PAUSED/ASSIGNED/EXCEPTION reach here at
   // all - COMPLETED rows drop out of get-my-sessions).
@@ -398,7 +398,7 @@ async function confirmStart(src){
  if(!r.ok){st.err=r.error||('Could not start that activity ('+(r.code||'error')+').');render();return;}
  const arr=allSessions();
  if(!arr.some(x=>x.id===r.data.sessionId))arr.push({id:r.data.sessionId,workerId:st.me.workerId,bedId:bedId,block:bedBlock(bedId),
-  activityId:act.id,activityName:act.name,qtyBased:act.qtyBased,unit:act.unit,
+  activityId:act.id,activityName:act.name,qtyBased:act.qtyBased,unit:act.unit,isFertilizer:/fertiliz|fertigat/i.test(act.name||''),
   status:'active',startTime:Date.now(),totalPausedMs:0,pausedAt:null});
  saveSessions(arr);loadForMe();
  const made=st.sessions.find(x=>x.id===r.data.sessionId);
@@ -479,16 +479,34 @@ async function resumeS(id){
  if(!r.ok){st.err=r.error||('Could not resume that task ('+(r.code||'error')+').');render();return;}
  localUpdate(id,{status:'active',pausedAt:null,pauseType:'',totalPausedMs:(s.totalPausedMs||0)+(Date.now()-s.pausedAt)});render();
 }
-function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain=true;render();}
+/* ---- Fertilizer brand protection (GovernanceEngine.gs): type, brand and quantity are mandatory before Complete ---- */
+function fertBlank_(){return {type:'',brand:'',qty:'',unit:'lbs',method:''};}
+function isFert_(s){return !!s&&s.isFertilizer===true;}
+function fertMissing_(){const f=st.fert||{},m=[];if(!f.type)m.push('fertilizer type');if(!String(f.brand||'').trim())m.push('brand name');if(!(Number(f.qty)>0))m.push('quantity');return m;}
+function fertPayload_(){const f=st.fert||{};return {type:f.type,brand:String(f.brand||'').trim(),quantity:Number(f.qty),unit:f.unit,method:f.method||'',notes:st.notes||''};}
+function fertForm_(){
+ const f=st.fert||(st.fert=fertBlank_());
+ const sel=(v,list)=>list.map(([val,lab])=>`<option value="${val}" ${v===val?'selected':''}>${lab}</option>`).join('');
+ return `<div class="banner" style="background:#EEF5EE;color:#1f3d24;border:1px solid #bcd6bf;">Required for fertilizer: what was applied, the brand, and how much. This record protects our organic certification.</div>
+  <label>Fertilizer type *</label><select onchange="st.fert.type=this.value">${sel(f.type,[['','Choose…'],['ORGANIC','Organic'],['NON_ORGANIC','Non-organic'],['AMENDMENT','Amendment']])}</select>
+  <label style="margin-top:8px;">Brand name *</label><input type="text" maxlength="80" value="${esc(f.brand)}" placeholder="e.g. Neptune's Harvest" oninput="st.fert.brand=this.value">
+  <label style="margin-top:8px;">Quantity applied *</label>
+  <div class="row" style="gap:6px;"><input type="number" min="0" step="any" inputmode="decimal" style="flex:2;" value="${esc(f.qty)}" oninput="st.fert.qty=this.value">
+   <select style="flex:1;" onchange="st.fert.unit=this.value">${sel(f.unit,['lbs','oz','kg','g','gal','qt','L','mL'].map(u=>[u,u]))}</select></div>
+  <label style="margin-top:8px;">Application method</label><select onchange="st.fert.method=this.value">${sel(f.method,[['','Not stated'],['Foliar','Foliar'],['Side-Dress','Side-Dress'],['Drip Line','Drip Line']])}</select>`;
+}
+function openComplete(id){if(st.pending[id])return;st.fert=fertBlank_();st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain=true;render();}
 async function confirmComplete(id){
  const s=st.sessions.find(x=>x.id===id);if(!s||st.pending[id])return;
  if(s.activityId==='ACT_018'&&!(Number(st.qty)>0)){st.cardErr[id]='Enter how much was harvested before finishing.';render();return;}
+ if(isFert_(s)){const miss=fertMissing_();if(miss.length){st.cardErr[id]='Enter the '+miss.join(', ')+' before finishing.';render();return;}}
  st.pending[id]='completing';delete st.cardErr[id];st.err=null;st.lastChange=Date.now();render();
- let r=await api('end-activity',{sessionId:id,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?!!st.coldChain:undefined});
+ let r=await api('end-activity',{sessionId:id,fertilizer:isFert_(s)?fertPayload_():undefined,quantity:isFert_(s)?Number(st.fert.qty):st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?!!st.coldChain:undefined});
  if(handleAuthError(r)){delete st.pending[id];return;}
  // A lost reply, or "not active" because the first tap already closed it: ask the server before calling it a failure.
  if(isTransient_(r)||(!r.ok&&r.code==='SESSION_NOT_ACTIVE')){if(await sessionIsClosed_(id))r={ok:true};}
  delete st.pending[id];
+ if(!r.ok&&r.code==='FERTILIZER_INPUTS_REQUIRED'){localUpdate(id,{isFertilizer:true});}
  if(!r.ok){st.cardErr[id]=r.error||('Could not complete that task ('+(r.code||'error')+'). Tap Confirm Complete to try again.');render();return;}
  delete st.holds[id];
  localUpdate(id,{status:'completed',endTime:Date.now()});
@@ -652,7 +670,8 @@ function renderHome(){
       </div>`):completingNow?`
       <div class="progress"><span class="spin"></span>Completing…</div>`:completing?`
       <div class="sub" style="font-weight:700;margin:2px 0 6px;">Mark ${esc(s.activityName)} on ${esc(s.bedId)} as complete?</div>
-      ${s.qtyBased?`<label>Quantity (${esc(s.unit)})</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:''}
+      ${isFert_(s)?fertForm_():''}
+      ${s.qtyBased&&!isFert_(s)?`<label>Quantity (${esc(s.unit)})</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:''}
       ${s.activityId==='ACT_018'?`<label style="margin-top:8px;">Grade</label><select onchange="st.grade=this.value"><option value="" ${!st.grade?'selected':''}>Not graded</option>${['A','B','C','Cull'].map(g=>`<option value="${g}" ${st.grade===g?'selected':''}>${g}</option>`).join('')}</select><div class="chk"><input type="checkbox" id="ccChk" ${st.coldChain?'checked':''} onchange="st.coldChain=this.checked"><label for="ccChk" style="margin:0;">Cold chain OK (kept cool and shaded)</label></div>`:''}
       ${s.activityId==='ACT_018'?`<div class="chk"><input type="checkbox" id="finalChk" ${st.isFinal?'checked':''} onchange="st.isFinal=this.checked"><label for="finalChk" style="margin:0;">Final harvest for this cohort</label></div>`:''}
       <label style="margin-top:8px;">Notes (optional)</label><input type="text" value="${esc(st.notes)}" oninput="st.notes=this.value">
