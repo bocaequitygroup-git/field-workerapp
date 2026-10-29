@@ -481,8 +481,8 @@ async function resumeS(id){
 }
 /* ---- Fertilizer (GovernanceEngine.gs): the manager enters type, brand and quantity when assigning the task. The worker only sees them. ---- */
 function isFert_(s){return !!s&&s.isFertilizer===true;}
-function fertFromRow_(r){if(!r||(!r.Fert_Type&&!r.Fert_Brand&&!r.Fert_Quantity))return null;return {type:String(r.Fert_Type||''),brand:String(r.Fert_Brand||''),qty:r.Fert_Quantity,unit:String(r.Fert_Unit||''),notes:String(r.Fert_Notes||'')};}
-function fertLine_(s){const f=s&&s.fert;if(!f)return '';return `<div class="sub" style="font-weight:700;">Apply: ${esc(f.type)} · ${esc(f.brand)} · ${esc(f.qty)} ${esc(f.unit)}</div>${f.notes?`<div class="sub">${esc(f.notes)}</div>`:''}`;}
+function fertFromRow_(r){if(!r)return null;const o=r.fertilizer&&typeof r.fertilizer==='object'?r.fertilizer:null;const g=(a,b)=>String((r[a]!=null&&r[a]!=='')?r[a]:(o&&o[b]!=null?o[b]:'')) ;const f={type:g('Fert_Type','type'),brand:g('Fert_Brand','brand'),qty:(r.Fert_Quantity!=null&&r.Fert_Quantity!=='')?r.Fert_Quantity:(o&&o.quantity!=null?o.quantity:''),unit:g('Fert_Unit','unit'),organic:g('Fert_Organic','organic'),method:g('Fert_Method','method'),notes:g('Fert_Notes','notes')};if(!f.type&&!f.brand&&f.qty==='')return null;return f;}
+function fertLine_(s){const f=s&&s.fert;if(!f)return '';const row=(k,v)=>v===''||v==null?'':`<div class="sub"><b>${k}:</b> ${esc(v)}</div>`;const org=f.organic==='ORGANIC'?'Organic':f.organic==='NON_ORGANIC'?'Non-organic':f.organic;return `<div style="margin-top:6px;padding:6px 8px;border:1px solid #bcd6bf;border-radius:8px;background:#EEF5EE;"><div class="sub" style="font-weight:700;">Fertilizer to apply</div>${row('Type',f.type)}${row('Brand',f.brand)}${row('Quantity',(f.qty!==''?f.qty:'')+(f.unit?' '+f.unit:''))}${row('Organic',org)}${row('Method',f.method)}${row('Notes',f.notes)}</div>`;}
 function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain=true;render();}
 async function confirmComplete(id){
  const s=st.sessions.find(x=>x.id===id);if(!s||st.pending[id])return;
