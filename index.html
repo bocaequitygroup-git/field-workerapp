@@ -194,10 +194,21 @@ function shortName(n){return(n||'').trim().split(/\s+/)[0]||n;}
    not whatever this device happens to remember) and replaces the active/paused portion of
    st.sessions with the real thing. This is what makes a session another device started (or
    one a manager started via ranch_aab / reassigned to this worker) actually show up here.
-   There is no worker-facing "completed history" read on the server yet, so completed rows
-   still come from this device's own localStorage - a task completed on a DIFFERENT device
-   will not show in Completed History here, only its disappearance from Active Sessions
-   (which IS server-truth) will be visible everywhere. */
+   Completed rows: the Log tab merges this device's own localStorage with the server's 'get-my-completed'
+   (WorkerLog.gs, read from FIELD_ACTIVITY_LOG, scoped to the logged-in worker), so a task finished on
+   ANOTHER device, or closed by a manager, shows here too. If that route is not deployed or fails, the
+   Log silently falls back to this device's own rows. */
+/** FIELD_ACTIVITY_LOG row (from get-my-completed) -> the completed-session shape the Log tab reads. */
+function mapServerDone_(r){
+ const a=actByName(r.activityName)||{};
+ const start=new Date(r.startTime).getTime(), end=new Date(r.endTime).getTime();
+ const s0=isNaN(start)?end:start;
+ // elapsed() = end - start - totalPausedMs; the server's Elapsed_Minutes already excludes pauses, so back the paused time out of it.
+ const paused=Math.max(0,(end-s0)-Math.round((Number(r.elapsedMinutes)||0)*60000));
+ return {id:r.id||r.logId, workerId:st.me.workerId, bedId:r.bedId, block:bedBlock(r.bedId), activityId:r.activityId||a.id||'',
+  activityName:r.activityName||'', qtyBased:!!a.qtyBased, unit:r.unit||a.unit||'', status:'completed',
+  startTime:s0, endTime:end, totalPausedMs:paused, pausedAt:null};
+}
 function sessSig_(){return JSON.stringify(st.sessions.map(s=>[s.id,s.status,s.pauseType,s.activityName,s.bedId,s.assignedTime,s.managerName,s.reassignedFromName,s.description,Math.round((s.totalPausedMs||0)/1000)]));}
 function allSessions(){try{return JSON.parse(localStorage.getItem('vpos_sessions')||'[]');}catch(e){return[];}}
 function saveSessions(arr){localStorage.setItem('vpos_sessions',JSON.stringify(arr));}
@@ -287,13 +298,16 @@ if(st.me)loadForMe(); // instant paint from local cache; syncActiveSessions_() b
 async function syncActiveSessions_(force){
  if(!st.me)return;
  const seq=++syncSeq, startedAt=Date.now();
- const r=await api('get-my-sessions',{});
+ const [r,rc]=await Promise.all([api('get-my-sessions',{}),api('get-my-completed',{})]);
  if(handleAuthError(r))return;
+ if(rc&&rc.ok&&Array.isArray(rc.data))st.serverDone=rc.data.map(mapServerDone_).filter(x=>x.id&&!isNaN(x.endTime));   // on failure keep the last good copy
  // A slow answer that left BEFORE the worker tapped Start/Complete describes the old state. Applying it put the card back to
  // 'Start' / 'Complete' after the tap had worked, which is why the worker had to tap again. Only the newest, post-tap answer counts.
  if(seq!==syncSeq||startedAt<st.lastChange)return;
  if(!r.ok){st.err=r.error||'Could not refresh your sessions.';render();return;}
- const localCompleted=allSessions().filter(s=>s.workerId===st.me.workerId&&s.status==='completed');
+ const localOnly=allSessions().filter(s=>s.workerId===st.me.workerId&&s.status==='completed');
+ const haveLocal={};localOnly.forEach(x=>{haveLocal[x.id]=1;});
+ const localCompleted=localOnly.concat((st.serverDone||[]).filter(x=>!haveLocal[x.id]));   // this device's own row wins; the server adds the rest
  // FIX: get-my-sessions can still return a row that is already finished (workbook says COMPLETED), and this
  // mapper used to turn anything that was not PAUSED/ASSIGNED into 'active' - so a task you just completed
  // came straight back as a running card (timer counting from its start time) next to its Completed History
@@ -524,7 +538,7 @@ function tabsHtml_(active){
  const n=st.sessions.filter(s=>s.status==='completed'&&st.flash[s.id]!=='completed').length;
  return `<div class="tabs">
   <div class="tab ${active==='home'?'on':''}" onclick="go('home')">Sessions</div>
-  <div class="tab ${active==='log'?'on':''}" onclick="go('log')">Log${n?' ('+n+')':''}</div></div>`;
+  <div class="tab ${active==='log'?'on':''}" onclick="go('log');syncActiveSessions_(true)">Log${n?' ('+n+')':''}</div></div>`;
 }
 
 /* ---- Log tab: completed tasks, filtered ---- */
