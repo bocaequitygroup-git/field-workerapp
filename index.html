@@ -657,7 +657,7 @@ function renderHome(){
       </div>`):completingNow?`
       <div class="progress"><span class="spin"></span>Completing…</div>`:completing?`
       <div class="sub" style="font-weight:700;margin:2px 0 6px;">Mark ${esc(s.activityName)} on ${esc(s.bedId)} as complete?</div>
-      ${s.qtyBased&&!s.fert?`<label>Quantity (${esc(s.unit)})</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:''}
+      ${s.isFertilizer?(s.fert?'':`<div class="sub" style="margin:4px 0 6px;">The manager has not entered the fertilizer details for this task. You can still complete it; the manager will be notified.</div>`):(s.qtyBased?`<label>Quantity (${esc(s.unit)})</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:'')}
       ${s.activityId==='ACT_018'?`<label style="margin-top:8px;">Grade</label><select onchange="st.grade=this.value"><option value="" ${!st.grade?'selected':''}>Not graded</option>${['A','B','C','Cull'].map(g=>`<option value="${g}" ${st.grade===g?'selected':''}>${g}</option>`).join('')}</select><div class="chk"><input type="checkbox" id="ccChk" ${st.coldChain?'checked':''} onchange="st.coldChain=this.checked"><label for="ccChk" style="margin:0;">Cold chain OK (kept cool and shaded)</label></div>`:''}
       ${s.activityId==='ACT_018'?`<div class="chk"><input type="checkbox" id="finalChk" ${st.isFinal?'checked':''} onchange="st.isFinal=this.checked"><label for="finalChk" style="margin:0;">Final harvest for this cohort</label></div>`:''}
       <label style="margin-top:8px;">Notes (optional)</label><input type="text" value="${esc(st.notes)}" oninput="st.notes=this.value">
