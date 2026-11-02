@@ -209,7 +209,7 @@ function mapServerDone_(r){
   activityName:r.activityName||'', qtyBased:!!a.qtyBased, unit:r.unit||a.unit||'', status:'completed',
   startTime:s0, endTime:end, totalPausedMs:paused, pausedAt:null};
 }
-function sessSig_(){return JSON.stringify(st.sessions.map(s=>[s.id,s.status,s.pauseType,s.activityName,s.bedId,s.assignedTime,s.managerName,s.reassignedFromName,s.description,Math.round((s.totalPausedMs||0)/1000)]));}
+function sessSig_(){return JSON.stringify(st.sessions.map(s=>[s.id,s.status,s.pauseType,s.activityId,s.activityName,s.bedId,s.assignedTime,s.managerName,s.reassignedFromName,s.description,Math.round((s.totalPausedMs||0)/1000)]));}
 function allSessions(){try{return JSON.parse(localStorage.getItem('vpos_sessions')||'[]');}catch(e){return[];}}
 function saveSessions(arr){localStorage.setItem('vpos_sessions',JSON.stringify(arr));}
 function actByName(name){return ACTIVITIES.find(a=>a.name===name);}
@@ -232,6 +232,8 @@ function pauseState_(pauseTimesStr,resumeTimesStr,isPaused){
  }
  return {totalPausedMs, pausedAt: isPaused?pausedAt:null};
 }
+/** Activity line shown on session cards: "ACT_018: Harvest" (just the name when no id is known). */
+function actLine_(s){return (s.activityId?s.activityId+': ':'')+(s.activityName||'');}
 function mapServerSession_(r){
  const a=actByName(r.Activity_Name)||{};
  const rawStatus=String(r.Status||'').toUpperCase();
@@ -252,7 +254,7 @@ function mapServerSession_(r){
  const ps=pauseState_(r['Pause_Time(s)'],r['Resume_Time(s)'],isPaused);
  return {
   id:r.Session_ID, workerId:st.me.workerId, bedId:r.Bed_ID, block:bedBlock(r.Bed_ID),
-  activityId:a.id||'', activityName:r.Activity_Name||'', qtyBased:!!a.qtyBased, unit:a.unit||'', isFertilizer:r.Is_Fertilizer===true, fert:fertFromRow_(r),
+  activityId:r.Activity_ID||a.id||'', activityName:r.Activity_Name||'', qtyBased:!!a.qtyBased, unit:a.unit||'', isFertilizer:r.Is_Fertilizer===true, fert:fertFromRow_(r),
   // An EXCEPTION row is still an open session, so it still renders as 'active'
   // rather than disappearing (only ACTIVE/PAUSED/ASSIGNED/EXCEPTION reach here at
   // all - COMPLETED rows drop out of get-my-sessions).
@@ -579,7 +581,7 @@ function logListHtml_(){
   out+=`<div class="dayhead"><span>${esc(dayLabel_(endOf_(g[0])))}</span><span>${g.length} · ${fmt(t)}</span></div>`;
   out+=g.map(s=>`<div class="card"><div class="logrow"><div>
     <div style="font-weight:700;">${esc(s.bedId)} · ${esc(s.block)}</div>
-    <div class="sub">${esc(s.activityName)}</div>
+    <div class="sub">${esc(actLine_(s))}</div>
     <div class="sub">${esc(timeOf_(s.startTime))} – ${esc(timeOf_(s.endTime))}</div></div>
     <div class="logdur">${fmt(elapsed(s))}</div></div></div>`).join('');
  });
@@ -642,7 +644,7 @@ function renderHome(){
     <div class="row" style="margin-bottom:6px;"><div>
       <span class="badge ${s.status==='paused'?'paused':''}${justDone?'done':''}">${assigned?(starting?'STARTING':'WAITING'):(completingNow?'COMPLETING':s.status.toUpperCase())}${s.status==='paused'&&s.pauseType?' · '+esc(s.pauseType):''}</span>
       <div style="font-weight:700;margin-top:6px;">${esc(s.bedId)} · ${esc(s.block)}</div>
-      <div class="sub">${esc(s.activityName)}</div>
+      <div class="sub">${esc(actLine_(s))}</div>
       ${s.description?`<div class="sub">${esc(s.description)}</div>`:''}
       ${fertLine_(s)}
       ${s.reassignedFromName?`<div class="sub re">↩ Reassigned from ${esc(s.reassignedFromName)}${s.managerName?' by '+esc(s.managerName):''}</div>`
