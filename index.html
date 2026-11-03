@@ -313,7 +313,15 @@ function loadForMe(){st.sessions=allSessions().filter(s=>s.workerId===st.me.work
 if(st.me)loadForMe(); // instant paint from local cache; syncActiveSessions_() below reconciles with the server
 
 /** Replaces the active/paused portion of st.sessions with server truth; keeps local completed rows. */
+/** Refresh feedback: a forced sync (Refresh button, Log tab) shows a spinner on the Refresh button until the server answers. */
 async function syncActiveSessions_(force){
+ if(!st.me)return;
+ if(!force)return syncActiveSessionsCore_(force);
+ st.syncing=true; if(st.screen==='log'||st.screen==='home')render();
+ try{ await syncActiveSessionsCore_(force); }
+ finally{ st.syncing=false; if(st.me&&(st.screen==='log'||st.screen==='home'))render(); }
+}
+async function syncActiveSessionsCore_(force){
  if(!st.me)return;
  const seq=++syncSeq, startedAt=Date.now();
  const [r,rc]=await Promise.all([api('get-my-sessions',{}),api('get-my-completed',{})]);
@@ -560,7 +568,8 @@ function header(){
 function errBanner(){return st.err?`<div class="banner">${esc(st.err)}</div>`:'';}
 
 function renderLogin(){
- return `<h1 class="center">🌱 VPOS Field App</h1><p class="sub center">Sign in with your Worker ID and PIN</p>
+ return `<div class="center" style="font-size:26px;font-weight:800;margin:18px 0 2px;color:var(--accent);">Ngapori Ranch</div>
+ <h1 class="center">🌱 VPOS Field App</h1><p class="sub center">Sign in with your Worker ID and PIN</p>
  <div class="card">
  <label>Worker ID</label>
  <input type="text" placeholder="e.g. lisa" value="${esc(st.workerIdInput)}"
@@ -642,7 +651,7 @@ function renderLog(){
  return `${header()}
  ${tabsHtml_('log')}
  <div class="row" style="margin-bottom:2px;"><h1 style="flex:2;">Completed Log</h1>
-  <button class="btn secondary" style="flex:1;" onclick="syncActiveSessions_(true)">Refresh</button></div>
+  <button class="btn secondary" style="flex:1;" ${st.syncing?'disabled':''} onclick="syncActiveSessions_(true)">${st.syncing?'<span class="spin" style="display:inline-block;vertical-align:-3px;margin-right:6px;"></span>Refreshing…':'Refresh'}</button></div>
  ${errBanner()}
  <div class="chips">${chip('today','Today')}${chip('7d','Last 7 days')}${chip('all','All')}</div>
  <div class="filters">
@@ -665,7 +674,7 @@ function renderHome(){
   return `${header()}
  ${tabsHtml_('home')}
  <div class="row" style="margin-bottom:2px;"><h1 style="flex:2;">My Active Sessions</h1>
- <button class="btn secondary" style="flex:1;" onclick="syncActiveSessions_(true)">Refresh</button></div>
+ <button class="btn secondary" style="flex:1;" ${st.syncing?'disabled':''} onclick="syncActiveSessions_(true)">${st.syncing?'<span class="spin" style="display:inline-block;vertical-align:-3px;margin-right:6px;"></span>Refreshing…':'Refresh'}</button></div>
  <p class="sub" style="margin:0 0 10px;">Logged in as ${esc(st.me.name)} (${esc(shortName(st.me.name))})</p>
  ${errBanner()}
  ${active.length===0?'<p class="sub">No active tasks right now. Scan a bed to start one.</p>':
