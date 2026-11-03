@@ -270,7 +270,7 @@ function mapServerSession_(r){
  const ps=pauseState_(r['Pause_Time(s)'],r['Resume_Time(s)'],isPaused);
  return {
   id:r.Session_ID, workerId:st.me.workerId, bedId:r.Bed_ID, block:bedBlock(r.Bed_ID),
-  activityId:r.Activity_ID||a.id||'', activityName:r.Activity_Name||'', qtyBased:!!a.qtyBased, unit:a.unit||'', isFertilizer:r.Is_Fertilizer===true, fert:fertFromRow_(r),
+  activityId:r.Activity_ID||a.id||'', activityName:r.Activity_Name||'', qtyBased:!!a.qtyBased, unit:a.unit||'', isFertilizer:r.Is_Fertilizer===true, fert:fertFromRow_(r), grades:String(r.Harvest_Grades||'').split(',').map(x=>x.trim()).filter(Boolean),
   // An EXCEPTION row is still an open session, so it still renders as 'active'
   // rather than disappearing (only ACTIVE/PAUSED/ASSIGNED/EXCEPTION reach here at
   // all - COMPLETED rows drop out of get-my-sessions).
@@ -501,16 +501,18 @@ async function resumeS(id){
 function isFert_(s){return !!s&&s.isFertilizer===true;}
 function fertFromRow_(r){if(!r)return null;const o=r.fertilizer&&typeof r.fertilizer==='object'?r.fertilizer:null;const g=(a,b)=>String((r[a]!=null&&r[a]!=='')?r[a]:(o&&o[b]!=null?o[b]:'')) ;const f={type:g('Fert_Type','type'),brand:g('Fert_Brand','brand'),qty:(r.Fert_Quantity!=null&&r.Fert_Quantity!=='')?r.Fert_Quantity:(o&&o.quantity!=null?o.quantity:''),unit:g('Fert_Unit','unit'),organic:g('Fert_Organic','organic'),method:g('Fert_Method','method'),notes:g('Fert_Notes','notes')};if(!f.type&&!f.brand&&f.qty==='')return null;return f;}
 function fertLine_(s){const f=s&&s.fert;if(!f)return '';const row=(k,v)=>v===''||v==null?'':`<div class="sub"><b>${k}:</b> ${esc(v)}</div>`;const org=f.organic==='ORGANIC'?'Organic':f.organic==='NON_ORGANIC'?'Non-organic':f.organic;return `<div style="margin-top:6px;padding:6px 8px;border:1px solid #bcd6bf;border-radius:8px;background:#EEF5EE;"><div class="sub" style="font-weight:700;">Fertilizer to apply</div>${row('Type',f.type)}${row('Brand',f.brand)}${row('Quantity',(f.qty!==''?f.qty:'')+(f.unit?' '+f.unit:''))}${row('Organic',org)}${row('Method',f.method)}${row('Notes',f.notes)}</div>`;}
-function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain=true;render();}
+function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain='';render();}
 async function confirmComplete(id){
  const s=st.sessions.find(x=>x.id===id);if(!s||st.pending[id])return;
  if(s.activityId==='ACT_018'&&!(Number(st.qty)>0)){st.cardErr[id]='Enter how much was harvested before finishing.';render();return;}
+ if(s.activityId==='ACT_018'&&st.coldChain!=='yes'&&st.coldChain!=='no'){st.cardErr[id]='Answer the cold-chain question (Yes or No) before finishing.';render();return;}
  st.pending[id]='completing';delete st.cardErr[id];st.err=null;st.lastChange=Date.now();render();
- let r=await api('end-activity',{sessionId:id,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?!!st.coldChain:undefined});
+ let r=await api('end-activity',{sessionId:id,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?(st.coldChain==='yes'?true:st.coldChain==='no'?false:undefined):undefined});
  if(handleAuthError(r)){delete st.pending[id];return;}
  // A lost reply, or "not active" because the first tap already closed it: ask the server before calling it a failure.
  if(isTransient_(r)||(!r.ok&&r.code==='SESSION_NOT_ACTIVE')){if(await sessionIsClosed_(id))r={ok:true};}
  delete st.pending[id];
+ if(!r.ok&&r.code==='INVALID_GRADE'){st.grade='';if(Array.isArray(r.allowed)&&r.allowed.length)s.grades=r.allowed;}
  if(!r.ok){st.cardErr[id]=r.error||('Could not complete that task ('+(r.code||'error')+'). Tap Confirm Complete to try again.');render();return;}
  delete st.holds[id];
  localUpdate(id,{status:'completed',endTime:Date.now()});
@@ -702,7 +704,7 @@ function renderHome(){
       <div class="progress"><span class="spin"></span>Completing…</div>`:completing?`
       <div class="sub" style="font-weight:700;margin:2px 0 6px;">Mark ${esc(s.activityName)} on ${esc(s.bedId)} as complete?</div>
       ${s.isFertilizer?(s.fert?'':`<div class="sub" style="margin:4px 0 6px;">The manager has not entered the fertilizer details for this task. You can still complete it; the manager will be notified.</div>`):(s.qtyBased?`<label>Quantity (${esc(s.unit)})</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:'')}
-      ${s.activityId==='ACT_018'?`<label style="margin-top:8px;">Grade</label><select onchange="st.grade=this.value"><option value="" ${!st.grade?'selected':''}>Not graded</option>${['A','B','C','Cull'].map(g=>`<option value="${g}" ${st.grade===g?'selected':''}>${g}</option>`).join('')}</select><div class="chk"><input type="checkbox" id="ccChk" ${st.coldChain?'checked':''} onchange="st.coldChain=this.checked"><label for="ccChk" style="margin:0;">Cold chain OK (kept cool and shaded)</label></div>`:''}
+      ${s.activityId==='ACT_018'?`<label style="margin-top:8px;">Grade</label><select onchange="st.grade=this.value"><option value="" ${!st.grade?'selected':''}>Not graded</option>${((s.grades&&s.grades.length)?s.grades:['A','B','C','Cull']).map(g=>`<option value="${esc(g)}" ${st.grade===g?'selected':''}>${esc(g)}</option>`).join('')}</select><label style="margin-top:8px;">Cold chain kept (cool and shaded)?</label><select id="ccSel" onchange="st.coldChain=this.value"><option value="" ${!st.coldChain?'selected':''}>Choose Yes or No</option><option value="yes" ${st.coldChain==='yes'?'selected':''}>Yes</option><option value="no" ${st.coldChain==='no'?'selected':''}>No</option></select>`:''}
       ${s.activityId==='ACT_018'?`<div class="chk"><input type="checkbox" id="finalChk" ${st.isFinal?'checked':''} onchange="st.isFinal=this.checked"><label for="finalChk" style="margin:0;">Final harvest for this cohort</label></div>`:''}
       <label style="margin-top:8px;">Notes (optional)</label><input type="text" value="${esc(st.notes)}" oninput="st.notes=this.value">
       <div class="row">
