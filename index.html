@@ -81,6 +81,22 @@ select{width:100%;padding:12px;border-radius:var(--radius);border:1.5px solid va
 .dayhead{display:flex;justify-content:space-between;font-size:13px;font-weight:700;color:var(--sub);margin:14px 2px 6px;}
 .logrow{display:flex;justify-content:space-between;align-items:center;gap:10px;}
 .logdur{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;}
+/* Intake lot sticker (shown after a Harvest is logged). The label is always black on white so it prints and scans in either theme. */
+.lotov{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;}
+.lotbox{background:#fff;color:#000;border-radius:14px;padding:16px;width:100%;max-width:420px;}
+.lotlabel{border:2px solid #000;padding:10px;text-align:center;background:#fff;color:#000;}
+.lotid{font:700 24px/1.2 ui-monospace,Menlo,Consolas,monospace;letter-spacing:1px;margin:6px 0;}
+.lotmeta{font-size:12px;color:#000;}
+.lotbtns{display:flex;gap:8px;margin-top:12px;}
+.lotbtns .btn{flex:1;}
+@media print{
+ @page{margin:6mm;}
+ body{background:#fff;}
+ #app>*:not(#lotSticker){display:none!important;}
+ #lotSticker{position:static;background:#fff;padding:0;display:block;}
+ .lotbox{max-width:none;padding:0;}
+ .noprint{display:none!important;}
+}
 </style>
 </head>
 <body>
@@ -279,7 +295,7 @@ function mapServerSession_(r){
 let tickTimer=null;
 let syncSeq=0;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
- sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,
+ sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,lotSticker:null,
  pausingId:null,pauseReason:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{}};
 const HOLD_MS=60000;   // how long a just-confirmed Start is trusted over a server answer that has not caught up
 
@@ -355,7 +371,7 @@ async function attemptLogin(){
 }
 function doLogout(callServer){
  if(callServer!==false && st.token) api('logout',{device:(navigator.userAgent||'').slice(0,100)});
- try{sessionStorage.removeItem('vpos_session');localStorage.removeItem('vpos_session');}catch(e){}st.me=null;st.token=null;st.sessions=[];go('login');
+ try{sessionStorage.removeItem('vpos_session');localStorage.removeItem('vpos_session');}catch(e){}st.me=null;st.token=null;st.sessions=[];st.lotSticker=null;go('login');
 }
 
 function startNewTask(){st.scanQuery='';st.selBed=null;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('scan');}
@@ -499,10 +515,36 @@ async function confirmComplete(id){
  delete st.holds[id];
  localUpdate(id,{status:'completed',endTime:Date.now()});
  st.completingId=null;
+ if(s.activityId==='ACT_018'){
+  const d=(r&&r.data)||{};
+  if(d.intakeLot&&d.intakeLot.id)st.lotSticker={lotId:d.intakeLot.id,cropId:d.intakeLot.cropId||'',bedId:d.intakeLot.bedId||s.bedId,cohortId:d.intakeLot.cohortId||'',cutTime:d.intakeLot.cutTime||'',workerName:(st.me&&st.me.name)||''};
+  else if(d.harvestLogged===false)st.err=(d.warning||'The harvest log row failed.')+' No lot sticker was issued. Tell the manager.';
+  else st.err='Harvest finished, but the lot sticker could not be shown. The manager can find the Intake Lot ID in the harvest log.';
+ }
  st.flash[id]='completed';   // card stays on screen for a moment showing \"Completed\", then moves to Completed History
  render();syncActiveSessions_();
  setTimeout(()=>{delete st.flash[id];if(st.screen==='home')render();},1600);
 }
+
+/* ---- Intake lot sticker (HarvestEngine.gs issues the ID; Code 39 barcode, verified against the standard's bar patterns) ---- */
+const C39_={'0':'000110100','1':'100100001','2':'001100001','3':'101100000','4':'000110001','5':'100110000','6':'001110000','7':'000100101','8':'100100100','9':'001100100','A':'100001001','B':'001001001','C':'101001000','D':'000011001','E':'100011000','F':'001011000','G':'000001101','H':'100001100','I':'001001100','J':'000011100','K':'100000011','L':'001000011','M':'101000010','N':'000010011','O':'100010010','P':'001010010','Q':'000000111','R':'100000110','S':'001000110','T':'000010110','U':'110000001','V':'011000001','W':'111000000','X':'010010001','Y':'110010000','Z':'011010000','-':'010000101','.':'110000100',' ':'011000100','*':'010010100'};
+function code39Svg_(text,h){
+ const t='*'+String(text).toUpperCase()+'*',N=2,W=6,Q=20;let x=Q,bars='';
+ for(const ch of t){const p=C39_[ch];if(!p)continue;for(let i=0;i<9;i++){const w=p[i]==='1'?W:N;if(i%2===0)bars+=`<rect x="${x}" y="0" width="${w}" height="${h}"/>`;x+=w;}x+=N;}
+ const total=x-N+Q;
+ return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${h}" width="100%" height="${h}" preserveAspectRatio="none" fill="#000" role="img" aria-label="Barcode ${esc(text)}">${bars}</svg>`;
+}
+function stickerOverlay_(){
+ const l=st.lotSticker;if(!l)return'';
+ const d=l.cutTime?new Date(l.cutTime):null,cut=d&&!isNaN(d.getTime())?d.toLocaleString([], {dateStyle:'medium',timeStyle:'short'}):'';
+ return `<div class="lotov" id="lotSticker"><div class="lotbox">
+  <div class="noprint" style="font-weight:700;margin-bottom:8px;">Harvest logged. Put this sticker on every bin of this pick.</div>
+  <div class="lotlabel"><div class="lotmeta">NGAPORI RANCH · INTAKE LOT</div><div class="lotid">${esc(l.lotId)}</div>${code39Svg_(l.lotId,60)}
+   <div class="lotmeta">${esc(l.cropId)} · ${esc(l.bedId)}${cut?' · '+esc(cut):''}</div><div class="lotmeta">${l.cohortId?'Cohort '+esc(l.cohortId)+' · ':''}${esc(l.workerName)}</div></div>
+  <div class="lotbtns noprint"><button class="btn secondary" onclick="closeSticker_()">Done</button><button class="btn" onclick="window.print()">Print sticker</button></div>
+ </div></div>`;
+}
+function closeSticker_(){st.lotSticker=null;render();}
 
 function connPill(){
  return `<div class="conn-pill ${st.connected?'':'off'}"><span class="dot"></span>${st.connected?'Connected':'Offline'}</div>`;
@@ -544,7 +586,7 @@ function tabsHtml_(active){
  const n=st.sessions.filter(s=>s.status==='completed'&&st.flash[s.id]!=='completed').length;
  return `<div class="tabs">
   <div class="tab ${active==='home'?'on':''}" onclick="go('home')">Sessions</div>
-  <div class="tab ${active==='log'?'on':''}" onclick="go('log');syncActiveSessions_(true)">Log${n?' ('+n+')':''}</div></div>`;
+  <div class="tab ${active==='log'?'on':''}" onclick="go('log');syncActiveSessions_(true)">Log${n?' ('+n+')':''}</div>${phOK_()?`<div class="tab ${active==='packhouse'?'on':''}" onclick="go('packhouse')">Packhouse</div>`:''}</div>`;
 }
 
 /* ---- Log tab: completed tasks, filtered ---- */
@@ -762,6 +804,143 @@ function updateTimers(){
   if(elT)elT.textContent=fmt(elapsed(s));
  });
 }
+/* ==========================================================================
+   PACKHOUSE FLOOR (Worker / Technician): dock receiving by scan, grade, wash, dry, cool, store, pack, case label, pickup.
+   Holds, discards, dwell acknowledgement and closeout stay manager-only (the server refuses them for workers anyway).
+   ========================================================================== */
+const PHW = { d: null, who: '', at: 0, tab: 'receive', open: null, msg: '', scan: '', label: null };
+const phOK_ = () => !!st.me && /^(worker|technician)$/i.test(String(st.me.role || ''));
+const phq = (s, r) => (r || document).querySelector(s), phqa = (s, r) => Array.from((r || document).querySelectorAll(s));
+const phLb = n => (n == null || n === '' || isNaN(n)) ? '' : (Math.round(n * 100) / 100) + ' lb';
+const phNames = { GRADE: 'Grade', WASH: 'Wash', DRY: 'Dry', PRECOOL: 'Cool', STORE: 'Store' };
+const phStages = { RECEIVED: 'Received', GRADED: 'Graded', WASHED: 'Washed', DRIED: 'Dried', PRECOOLED: 'Cooled', STORED: 'In cold room', HOLD: 'On hold' };
+const phNorm = s => String(s == null ? '' : s).toUpperCase().replace(/[\s*]/g, '');
+const phOpts = (list, blank) => (blank ? `<option value="">${esc(blank)}</option>` : '') + list.map(o => `<option value="${esc(o[0])}">${esc(o[1])}</option>`).join('');
+const phIn = (k, l, a) => `<div style="margin-top:8px"><label>${esc(l)}</label><input type="text" data-k="${k}" ${a || 'inputmode="decimal" autocomplete="off"'}></div>`;
+const phSel = (k, l, o) => `<div style="margin-top:8px"><label>${esc(l)}</label><select data-k="${k}">${o}</select></div>`;
+const phErr = '<div class="err" hidden></div>';
+const phChip = (t, bad) => `<span style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;margin:6px 6px 0 0;background:${bad ? 'var(--warn)' : 'var(--border)'};color:${bad ? '#fff' : 'var(--text)'}">${esc(t)}</span>`;
+
+async function phApi(action, payload) {
+  const r = await api(action, payload || {});
+  if (r && r.ok === false) { handleAuthError(r); throw new Error(r.error || 'The request failed.'); }
+  return (r && r.data !== undefined) ? r.data : r;
+}
+async function phLoad() {
+  try { PHW.d = await phApi('get-packhouse'); PHW.at = Date.now(); } catch (e) { PHW.msg = e.message; }
+  phPaint();
+}
+function renderPackhouse() { return `${header()}\n${tabsHtml_('packhouse')}\n<h1>Packhouse</h1>${errBanner()}<div id="ph-root"></div>`; }
+function phMount() {
+  const who = st.me ? st.me.workerId : '';
+  if (PHW.who !== who) Object.assign(PHW, { d: null, who, at: 0, tab: 'receive', open: null, msg: '', scan: '', label: null });
+  phPaint(); if (!PHW.d || Date.now() - PHW.at > 10000) phLoad();
+}
+function phPaint() {
+  const root = phq('#ph-root'), d = PHW.d; if (!root) return;
+  const tabs = [['receive', 'Receive'], ['lots', 'Lots'], ['pack', 'Pack']].map(t => `<div class="chip ${PHW.tab === t[0] ? 'on' : ''}" data-ph="tab" data-tab="${t[0]}">${t[1]}</div>`).join('');
+  const msg = PHW.msg ? `<div class="banner" style="background:var(--accent)">${esc(PHW.msg)}</div>` : '';
+  root.innerHTML = `<div class="chips">${tabs}</div>${msg}` + (!d ? '<p class="sub">Loading…</p>' : ({ receive: phReceive, lots: phLots, pack: phPack }[PHW.tab])(d));
+  PHW.msg = '';
+}
+function phReceive(d) {
+  const top = `<label>Scan or type the Intake Lot ID</label><div class="row" style="margin-top:0"><input type="text" id="ph-scan" value="${esc(PHW.scan)}" autocapitalize="characters" autocomplete="off" style="flex:3"><button class="btn secondary" type="button" data-ph="scan" style="flex:1">Find</button></div>`;
+  let list = d.incoming.map((h, i) => [h, i]);
+  if (PHW.scan) list = list.filter(x => phNorm(x[0].intakeLotId) === PHW.scan || phNorm(x[0].harvestId) === PHW.scan);
+  const all = PHW.scan ? '<span class="link" data-ph="clearscan">Show all lots at the dock</span>' : '';
+  if (!list.length) return top + `<p class="sub">${PHW.scan ? 'That lot is not waiting at the dock. It may already be received.' : 'Nothing is waiting at the dock.'}</p>${all}`;
+  return top + all + list.map(([h, i]) => {
+    const t = h.timer || {}, m = t.minutesLeft;
+    const clock = m == null ? '' : t.overdue ? phChip('Overdue ' + Math.abs(Math.round(m)) + ' min', true) : phChip(Math.round(m) + ' min left', m < 20);
+    return `<div class="card"><b>${esc(h.cropId)} · ${esc(h.bedId)}</b><div class="sub">${esc(h.intakeLotId || h.harvestId)}${h.weight != null ? ' · field ' + phLb(h.weight) : ''}</div>${clock}
+      <div data-form="rcv">${phIn('receivedWeight', 'Scale weight (lb)')}${phIn('scaleId', 'Scale ID', 'autocapitalize="characters" autocomplete="off"')}${phSel('coldChainOk', 'Cold enough on arrival?', '<option value="">Choose</option><option value="yes">Yes</option><option value="no">No</option>')}${phErr}
+      <button class="btn block" style="margin-top:10px" type="button" data-ph="receive" data-i="${i}">Receive lot</button></div></div>`;
+  }).join('');
+}
+function phLots(d) {
+  if (!d.lots.length) return '<p class="sub">No lots are in the packhouse.</p>';
+  return d.lots.map(l => {
+    const f = l.fifo, steps = l.stage === 'HOLD' ? [] : (l.nextSteps || []);
+    const open = PHW.open && PHW.open.lotId === l.lotId ? PHW.open.step : '';
+    return `<div class="card"><b>${esc(l.cropId)} · ${esc(l.lotId)}</b><div class="sub">${esc(l.intakeLotId)} · ${phLb(l.remainingLb)} left${l.grade ? ' · grade ' + esc(l.grade) : ''}</div>
+      ${phChip(phStages[l.stage] || l.stage, l.stage === 'HOLD')}${f ? phChip(f.room + ' ' + f.lane + ' · ' + Math.round(f.dwellHours || 0) + ' h') : ''}
+      ${l.stage === 'HOLD' ? '<p class="err">On hold' + (l.holdReason ? ' (' + esc(l.holdReason) + ')' : '') + '. Tell a manager.</p>' : ''}
+      <div class="row">${steps.map(s => `<button class="btn ${s === open ? '' : 'secondary'}" type="button" data-ph="open" data-lot="${esc(l.lotId)}" data-step="${s}">${phNames[s]}</button>`).join('')}</div>${open ? phStepForm(l, open) : ''}</div>`;
+  }).join('');
+}
+function phStepForm(l, s) {
+  const d = PHW.d, san = d.sanitation, rooms = d.rooms.slice().sort((a, b) => (b.room === l.needs.room) - (a.room === l.needs.room));
+  const f = {
+    GRADE: () => phIn('acceptedLb', 'Accepted (lb)') + phIn('cullLb', 'Cull (lb)') + phSel('grade', 'Grade', phOpts(d.grading.grades.map(g => [g, g]), 'Choose')) + phSel('reason', 'Cull reason', phOpts(d.grading.reasons.map(r => [r.code, r.name]), 'No cull')) + phIn('notes', 'Note', 'maxlength="200"'),
+    WASH: () => san.readings.map(r => phIn(r.key, r.label)).join('') + phIn('cullWeight', 'Cull at wash (lb, optional)') + phIn('notes', 'Note', 'maxlength="200"'),
+    DRY: () => phSel('equipment', 'Equipment', phOpts(san.equipment.map(e => [e.code, e.name]), 'Choose')) + phIn('durationMin', 'Minutes') + phIn('cycles', 'Spin cycles (spin dryer)', 'inputmode="numeric"') + '<label style="margin-top:10px;color:var(--text)"><input type="checkbox" data-k="completed"> Drying is complete</label>',
+    PRECOOL: () => phSel('method', 'Cooling method', phOpts([['HYDRO', 'Hydro-cool'], ['FORCED_AIR', 'Forced air'], ['NONE', 'None']], 'Choose')),
+    STORE: () => phSel('room', 'Cold room', phOpts(rooms.map(r => [r.room, r.name]))) + phIn('lane', 'Lane (blank = assign automatically)', 'autocapitalize="characters" autocomplete="off"')
+  };
+  return `<div data-form="step" data-lot="${esc(l.lotId)}" data-step="${s}">${f[s]()}${phErr}<button class="btn block" style="margin-top:10px" type="button" data-ph="step">Save: ${phNames[s].toLowerCase()}</button></div>`;
+}
+function phPack(d) {
+  const stored = d.lots.filter(l => l.stage === 'STORED'), need = d.orders.filter(o => o.stillNeededLb === null || o.stillNeededLb > 0);
+  let h = '<h1 style="font-size:16px">Orders to pack</h1>' + (need.length ? need.map(o => {
+    const lots = stored.filter(l => l.cropId === o.cropId).sort((a, b) => ((a.fifo && a.fifo.rank) || 99) - ((b.fifo && b.fifo.rank) || 99));
+    const form = lots.length ? `<div data-form="pack" data-order="${esc(o.orderId)}">${phSel('lotId', 'Lot (oldest first)', lots.map(l => `<option value="${esc(l.lotId)}">${l.fifo && l.fifo.nextToPack ? 'Pack next · ' : ''}${esc(l.lotId)} · ${phLb(l.remainingLb)} · ${l.fifo ? esc(l.fifo.lane) : ''}</option>`).join(''))}
+      ${phIn('packedWeight', 'Packed weight (lb)')}${phSel('packagingFormat', 'Packaging', phOpts(d.packaging.formats.map(x => [x.code, x.name]), 'Choose'))}${phIn('packageCount', 'How many', 'inputmode="numeric" autocomplete="off"')}${phErr}
+      <button class="btn block" style="margin-top:10px" type="button" data-ph="pack">Pack and issue case code</button></div>` : '<p class="sub">No cold-stored lot of this crop yet.</p>';
+    return `<div class="card"><b>${esc(o.restaurant)} · ${esc(o.cropId)}</b><div class="sub">Bay ${esc(o.bay)} · needs ${phLb(o.stillNeededLb)}${o.neededBy ? ' by ' + esc(o.neededBy) : ''}</div>${form}</div>`;
+  }).join('') : '<p class="sub">No open orders.</p>');
+  h += '<h1 style="font-size:16px;margin-top:16px">Boxes waiting</h1>';
+  return h + (d.boxesWaiting.length ? d.boxesWaiting.map(b => `<div class="card"><label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px;font-weight:700"><input type="checkbox" data-pick="${esc(b.packId)}">${esc(b.destination)}</label>
+    <div class="sub">${esc(b.caseCode || b.packId)} · ${esc(b.cropId)} · ${phLb(b.packedLb)}${b.packagingFormat ? ' · ' + b.packageCount + ' × ' + esc(b.packagingFormat.toLowerCase()) : ''}</div>
+    <div class="row"><button class="btn secondary" type="button" data-ph="label" data-pack="${esc(b.packId)}">Print case label</button></div></div>`).join('')
+    + `<div data-form="pickup">${phIn('pickedUpBy', 'Collected by', 'autocomplete="off"')}${phErr}<button class="btn block" style="margin-top:10px" type="button" data-ph="pickup">Hand over ticked boxes</button></div>` : '<p class="sub">No boxes are waiting for pickup.</p>');
+}
+function phLabelOverlay() {
+  const l = PHW.label;
+  return `<div class="lotov" id="lotSticker"><div class="lotbox"><div class="lotlabel"><div class="lotmeta">NGAPORI RANCH · CASE${l.reprint ? ' · REPRINT ' + l.printCount : ''}</div><div class="lotid">${esc(l.caseCode)}</div>${code39Svg_(l.caseCode, 60)}
+    <div class="lotmeta">${esc(l.cropId)} · bed ${esc(l.bedId)} · harvested ${esc(l.harvestDate)}</div><div class="lotmeta">Intake lot ${esc(l.intakeLotId)} · grade ${esc(l.grade)}</div>
+    <div class="lotmeta">${l.packageCount} × ${esc(String(l.format).toLowerCase())} · ${phLb(l.packedWeightLb)}</div><div class="lotmeta">${esc(l.restaurant)} · bay ${esc(l.bay)}</div></div>
+    <div class="lotbtns noprint"><button class="btn secondary" type="button" data-ph="unlabel">Done</button><button class="btn" type="button" onclick="window.print()">Print label</button></div></div></div>`;
+}
+function phScan_() { const el = phq('#ph-scan'); PHW.scan = phNorm(el ? el.value : ''); phPaint(); const w = phq('[data-k=receivedWeight]'); if (w) w.focus(); }
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'ph-scan') { e.preventDefault(); phScan_(); } });
+document.addEventListener('click', async e => {
+  const t = e.target.closest('[data-ph]'); if (!t || !phOK_()) return;
+  const a = t.dataset.ph, form = t.closest('[data-form]');
+  if (a === 'tab') { PHW.tab = t.dataset.tab; PHW.open = null; phPaint(); return phLoad(); }
+  if (a === 'open') { const same = PHW.open && PHW.open.lotId === t.dataset.lot && PHW.open.step === t.dataset.step; PHW.open = same ? null : { lotId: t.dataset.lot, step: t.dataset.step }; return phPaint(); }
+  if (a === 'scan') return phScan_();
+  if (a === 'clearscan') { PHW.scan = ''; return phPaint(); }
+  if (a === 'unlabel') { PHW.label = null; return render(); }
+  const v = {}, err = form && phq('.err', form);
+  if (form) phqa('[data-k]', form).forEach(el => { v[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.value.trim(); });
+  try {
+    t.disabled = true; if (err) err.hidden = true;
+    let call;
+    if (a === 'receive') {
+      const h = PHW.d.incoming[Number(t.dataset.i)];
+      if (v.coldChainOk === '') throw new Error('Answer the cold-chain question.');
+      call = ['receive-harvest', { intakeLotId: h.intakeLotId || undefined, harvestId: h.harvestId, receivedWeight: v.receivedWeight, scaleId: v.scaleId, coldChainOk: v.coldChainOk === 'yes' }, 'Lot received'];
+    } else if (a === 'step') {
+      const s = form.dataset.step, p = Object.assign({ lotId: form.dataset.lot }, v);
+      if (s === 'DRY') p.completed = v.completed === true;
+      if (s === 'GRADE' && p.cullLb === '') p.cullLb = '0';
+      call = s === 'GRADE' ? ['grade-lot', p, 'Lot graded'] : ['lot-step', Object.assign(p, { step: s }), phNames[s] + ' saved'];
+    } else if (a === 'pack') call = ['pack-order', Object.assign({ orderId: form.dataset.order }, v), 'Packed'];
+    else if (a === 'label') call = ['print-case-label', { packId: t.dataset.pack }];
+    else if (a === 'pickup') {
+      const ids = phqa('[data-pick]').filter(x => x.checked).map(x => x.dataset.pick);
+      if (!ids.length) throw new Error('Tick the boxes being collected.');
+      call = ['confirm-pickup', { packIds: ids, pickedUpBy: v.pickedUpBy }, 'Boxes handed over'];
+    } else return;
+    const res = await phApi(call[0], call[1]);
+    if (a === 'label') { PHW.label = res; return render(); }
+    PHW.open = null; if (a === 'receive') PHW.scan = '';
+    PHW.msg = call[2] + (res && res.caseCode ? ': ' + res.caseCode : res && res.lane ? ' · lane ' + res.lane : '');
+    await phLoad();
+  } catch (ex) { if (err) { err.textContent = ex.message; err.hidden = false; } else { PHW.msg = ex.message; phPaint(); } }
+  finally { t.disabled = false; }
+});
+
 function render(){
  const el=document.getElementById('app');
  if(st.screen==='login')el.innerHTML=renderLogin();
@@ -769,6 +948,9 @@ function render(){
  else if(st.screen==='log')el.innerHTML=renderLog();
  else if(st.screen==='scan')el.innerHTML=renderScan();
  else if(st.screen==='assignment')el.innerHTML=renderAssignment();
+ else if(st.screen==='packhouse')el.innerHTML=renderPackhouse();
+ if(st.lotSticker&&st.screen!=='login')el.insertAdjacentHTML('beforeend',stickerOverlay_());
+ if(st.screen==='packhouse'){phMount();if(PHW.label)el.insertAdjacentHTML('beforeend',phLabelOverlay());}
  if(tickTimer)clearInterval(tickTimer);
  if(st.screen==='home'&&st.sessions.some(s=>s.status==='active'))tickTimer=setInterval(updateTimers,1000);
 }
