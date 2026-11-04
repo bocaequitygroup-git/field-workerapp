@@ -97,10 +97,14 @@ select{width:100%;padding:12px;border-radius:var(--radius);border:1.5px solid va
  .lotbox{max-width:none;padding:0;}
  .noprint{display:none!important;}
 }
+#camDlg{border:none;border-radius:var(--radius);padding:12px;width:min(92vw,420px);background:var(--card);color:var(--text);}
+#camDlg::backdrop{background:rgba(0,0,0,.6);}
+#camDlg video{width:100%;border-radius:8px;background:#000;display:block;}
 </style>
 </head>
 <body>
 <div id="app" class="wrap"></div>
+<dialog id="camDlg"><video id="camVideo" playsinline muted></video><p class="sub" id="camHint" style="text-align:center;margin:8px 0;"></p><button class="btn secondary block" type="button" onclick="closeCamera_()">Cancel</button></dialog>
 <script>
 /* ================= Backend wiring ================= */
 const API_URL='https://script.google.com/macros/s/AKfycbw0dOXaMs3iykTuhv3heOMyQck0i8dJYjO_To60lIOtsYGuL1Lshmxju8Gopt3SWKNy/exec';
@@ -295,7 +299,7 @@ function mapServerSession_(r){
 let tickTimer=null;
 let syncSeq=0;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
- sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,lotSticker:null,
+ sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,lotSticker:null,bedScan:null,bedScanRaw:'',intakeIn:'',scanBusy:false,
  pausingId:null,pauseReason:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{}};
 const HOLD_MS=60000;   // how long a just-confirmed Start is trusted over a server answer that has not caught up
 
@@ -383,10 +387,19 @@ function doLogout(callServer){
 }
 
 function startNewTask(){st.scanQuery='';st.selBed=null;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('scan');}
-function processScan(){
- const q=(st.scanQuery||'').trim().toUpperCase();
- if(allBeds().includes(q))selectBed(q);
- else st.err='No bed found for "'+st.scanQuery+'". Try Search Beds below.';
+async function processScan(){
+ const raw=(st.scanQuery||'').trim(),q=raw.toUpperCase();
+ if(!q){st.err='Scan or type a bed ID first.';render();return;}
+ if(allBeds().includes(q)){selectBed(q);return;}
+ if(st.scanBusy)return;
+ // Not a bed ID on this phone's list: it may be a QR value, which only the server can resolve (scan-bed).
+ st.err=null;st.scanBusy=true;render();
+ const r=await api('scan-bed',{code:raw});
+ st.scanBusy=false;
+ if(handleAuthError(r))return;
+ const bed=r.ok&&r.data?String(r.data.bedId||'').toUpperCase():'';
+ if(bed&&allBeds().includes(bed)){selectBed(bed);return;}
+ st.err=r.ok?'Bed '+bed+' is not on this phone\'s bed list.':(r.error||'No bed found for "'+raw+'". Try Search Beds below.');
  render();
 }
 function selectBed(id){st.selBed=id;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('assignment');}
@@ -509,17 +522,19 @@ async function resumeS(id){
 function isFert_(s){return !!s&&s.isFertilizer===true;}
 function fertFromRow_(r){if(!r)return null;const o=r.fertilizer&&typeof r.fertilizer==='object'?r.fertilizer:null;const g=(a,b)=>String((r[a]!=null&&r[a]!=='')?r[a]:(o&&o[b]!=null?o[b]:'')) ;const f={type:g('Fert_Type','type'),brand:g('Fert_Brand','brand'),qty:(r.Fert_Quantity!=null&&r.Fert_Quantity!=='')?r.Fert_Quantity:(o&&o.quantity!=null?o.quantity:''),unit:g('Fert_Unit','unit'),organic:g('Fert_Organic','organic'),method:g('Fert_Method','method'),notes:g('Fert_Notes','notes')};if(!f.type&&!f.brand&&f.qty==='')return null;return f;}
 function fertLine_(s){const f=s&&s.fert;if(!f)return '';const row=(k,v)=>v===''||v==null?'':`<div class="sub"><b>${k}:</b> ${esc(v)}</div>`;const org=f.organic==='ORGANIC'?'Organic':f.organic==='NON_ORGANIC'?'Non-organic':f.organic;return `<div style="margin-top:6px;padding:6px 8px;border:1px solid #bcd6bf;border-radius:8px;background:#EEF5EE;"><div class="sub" style="font-weight:700;">Fertilizer to apply</div>${row('Type',f.type)}${row('Brand',f.brand)}${row('Quantity',(f.qty!==''?f.qty:'')+(f.unit?' '+f.unit:''))}${row('Organic',org)}${row('Method',f.method)}${row('Notes',f.notes)}</div>`;}
-function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain='';render();}
+function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain='';st.bedScan=null;st.bedScanRaw='';st.intakeIn='';st.scanBusy=false;render();}
 async function confirmComplete(id){
  const s=st.sessions.find(x=>x.id===id);if(!s||st.pending[id])return;
  if(s.activityId==='ACT_018'&&!(Number(st.qty)>0)){st.cardErr[id]='Enter how much was harvested before finishing.';render();return;}
  if(s.activityId==='ACT_018'&&st.coldChain!=='yes'&&st.coldChain!=='no'){st.cardErr[id]='Answer the cold-chain question (Yes or No) before finishing.';render();return;}
+ if(s.activityId==='ACT_018'&&st.bedScan&&!st.bedScan.ok){st.cardErr[id]=st.bedScan.msg;render();return;}
  st.pending[id]='completing';delete st.cardErr[id];st.err=null;st.lastChange=Date.now();render();
- let r=await api('end-activity',{sessionId:id,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?(st.coldChain==='yes'?true:st.coldChain==='no'?false:undefined):undefined});
+ let r=await api('end-activity',{sessionId:id,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?(st.coldChain==='yes'?true:st.coldChain==='no'?false:undefined):undefined,scannedBed:s.activityId==='ACT_018'?((st.bedScan?st.bedScan.raw:(st.bedScanRaw||'').trim())||undefined):undefined,intakeLotId:s.activityId==='ACT_018'?((st.intakeIn||'').trim()||undefined):undefined});
  if(handleAuthError(r)){delete st.pending[id];return;}
  // A lost reply, or "not active" because the first tap already closed it: ask the server before calling it a failure.
  if(isTransient_(r)||(!r.ok&&r.code==='SESSION_NOT_ACTIVE')){if(await sessionIsClosed_(id))r={ok:true};}
  delete st.pending[id];
+ if(!r.ok&&/^BED_SCAN_/.test(r.code||''))st.bedScan=null;
  if(!r.ok&&r.code==='INVALID_GRADE'){st.grade='';if(Array.isArray(r.allowed)&&r.allowed.length)s.grades=r.allowed;}
  if(!r.ok){st.cardErr[id]=r.error||('Could not complete that task ('+(r.code||'error')+'). Tap Confirm Complete to try again.');render();return;}
  delete st.holds[id];
@@ -535,6 +550,77 @@ async function confirmComplete(id){
  render();syncActiveSessions_();
  setTimeout(()=>{delete st.flash[id];if(st.screen==='home')render();},1600);
 }
+
+
+/* ---- Bed QR + lot sticker scan (Group B). The server (HarvestEngine.gs) re-checks both when the harvest is finished. ---- */
+function bedScanHtml_(s){
+ const b=st.bedScan;
+ const status=st.scanBusy?'<div class="sub">Checking the bed code…</div>':b?`<div class="${b.ok?'ok-note':'err'}">${esc(b.msg)}</div>`:`<div class="sub">Scan the QR code on the bed marker to confirm you are at bed ${esc(s.bedId)}.</div>`;
+ return `<label style="margin-top:8px;">Bed QR code</label>
+  <div class="row" style="margin-top:0"><input type="text" id="bedScanIn" value="${esc(st.bedScanRaw)}" autocapitalize="characters" autocomplete="off" placeholder="Scan or type the bed code" style="flex:3" oninput="st.bedScanRaw=this.value;st.bedScan=null" onkeydown="if(event.key==='Enter'){event.preventDefault();verifyBedScan_(this.value,'${esc(s.id)}')}"><button class="btn secondary" type="button" style="flex:1" onclick="openCamera_('bed')">📷 Scan</button></div>
+  ${status}
+  <label style="margin-top:8px;">Pre-printed lot sticker (optional)</label>
+  <div class="row" style="margin-top:0"><input type="text" id="lotScanIn" value="${esc(st.intakeIn)}" autocapitalize="characters" autocomplete="off" placeholder="NG-YYMMDD-NNNN" style="flex:3" oninput="st.intakeIn=this.value"><button class="btn secondary" type="button" style="flex:1" onclick="openCamera_('lot')">📷 Scan</button></div>
+  <div class="sub">Leave blank and a new Intake Lot ID is issued and shown as a sticker.</div>`;
+}
+async function verifyBedScan_(raw,id){
+ const s=st.sessions.find(x=>x.id===id);raw=String(raw||'').trim();
+ if(!s||st.scanBusy)return;
+ st.bedScanRaw=raw;
+ if(!raw){st.bedScan=null;render();return;}
+ st.scanBusy=true;render();
+ const r=await api('scan-bed',{code:raw});
+ st.scanBusy=false;
+ if(handleAuthError(r))return;
+ if(!r.ok){st.bedScan={ok:false,raw,msg:r.error||'That bed code could not be checked.'};render();return;}
+ const d=r.data||{},want=String(s.bedId||'').trim().toUpperCase(),got=String(d.bedId||'').trim().toUpperCase();
+ if(got!==want)st.bedScan={ok:false,raw,msg:'That code is for bed '+d.bedId+', but this harvest is on bed '+s.bedId+'. Scan the right bed.'};
+ else st.bedScan={ok:true,raw,msg:d.qrCode?'✓ Bed '+d.bedId+' scanned.':'✓ Bed '+d.bedId+' accepted (typed bed ID, not a QR scan).'};
+ render();
+}
+
+/* ---- Camera scanning (needs HTTPS and a browser with BarcodeDetector, e.g. Chrome on Android). Typing a code always still works. ---- */
+let camStream=null,camRaf=0,camTarget='';
+function camFail_(msg){
+ if(camTarget==='recv'||camTarget==='trace'){PHW.msg=msg;phPaint();return;}
+ if(camTarget==='startbed'){st.err=msg;render();return;}
+ if(st.completingId)st.cardErr[st.completingId]=msg;else st.err=msg;
+ render();
+}
+async function openCamera_(target){
+ camTarget=target;
+ const dlg=document.getElementById('camDlg');
+ if(!('BarcodeDetector' in window)||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!dlg||!dlg.showModal){camFail_('Camera scanning is not available on this phone or browser. Type the code or use a hand scanner.');return;}
+ try{
+  let fm=(target==='bed'||target==='startbed')?['qr_code']:['code_39','qr_code'];
+  if(BarcodeDetector.getSupportedFormats){const sup=await BarcodeDetector.getSupportedFormats();fm=fm.filter(f=>sup.includes(f));}
+  if(!fm.length){camFail_('This browser cannot read that kind of code. Type it instead.');return;}
+  const det=new BarcodeDetector({formats:fm});
+  camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+  const v=document.getElementById('camVideo');v.srcObject=camStream;await v.play();
+  document.getElementById('camHint').textContent=(target==='bed'||target==='startbed')?'Point the camera at the bed QR code.':target==='trace'?'Point the camera at the case label.':'Point the camera at the lot sticker.';
+  dlg.showModal();
+  const tick=async()=>{
+   if(!camStream)return;
+   try{const c=await det.detect(v);if(c.length){const val=String(c[0].rawValue||'').trim();closeCamera_();camDone_(target,val);return;}}catch(e){/* keep trying */}
+   camRaf=requestAnimationFrame(tick);
+  };
+  tick();
+ }catch(e){closeCamera_();camFail_('Could not open the camera. Allow camera access, or type the code.');}
+}
+function closeCamera_(){
+ cancelAnimationFrame(camRaf);
+ if(camStream){camStream.getTracks().forEach(t=>t.stop());camStream=null;}
+ const d=document.getElementById('camDlg');if(d&&d.open)d.close();
+}
+function camDone_(t,val){
+ if(t==='bed')verifyBedScan_(val,st.completingId);
+ else if(t==='lot'){st.intakeIn=val.toUpperCase();render();}
+ else if(t==='recv'){PHW.scan=phNorm(val);phPaint();}
+ else if(t==='trace')phTrace_(val);
+ else if(t==='startbed'){st.scanQuery=val;processScan();}
+}
+document.getElementById('camDlg').addEventListener('close',()=>{if(camStream)closeCamera_();});
 
 /* ---- Intake lot sticker (HarvestEngine.gs issues the ID; Code 39 barcode, verified against the standard's bar patterns) ---- */
 const C39_={'0':'000110100','1':'100100001','2':'001100001','3':'101100000','4':'000110001','5':'100110000','6':'001110000','7':'000100101','8':'100100100','9':'001100100','A':'100001001','B':'001001001','C':'101001000','D':'000011001','E':'100011000','F':'001011000','G':'000001101','H':'100001100','I':'001001100','J':'000011100','K':'100000011','L':'001000011','M':'101000010','N':'000010011','O':'100010010','P':'001010010','Q':'000000111','R':'100000110','S':'001000110','T':'000010110','U':'110000001','V':'011000001','W':'111000000','X':'010010001','Y':'110010000','Z':'011010000','-':'010000101','.':'110000100',' ':'011000100','*':'010010100'};
@@ -714,6 +800,7 @@ function renderHome(){
       <div class="sub" style="font-weight:700;margin:2px 0 6px;">Mark ${esc(s.activityName)} on ${esc(s.bedId)} as complete?</div>
       ${s.isFertilizer?(s.fert?'':`<div class="sub" style="margin:4px 0 6px;">The manager has not entered the fertilizer details for this task. You can still complete it; the manager will be notified.</div>`):(s.qtyBased?`<label>Quantity (${esc(s.unit)})</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:'')}
       ${s.activityId==='ACT_018'?`<label style="margin-top:8px;">Grade</label><select onchange="st.grade=this.value"><option value="" ${!st.grade?'selected':''}>Not graded</option>${((s.grades&&s.grades.length)?s.grades:['A','B','C','Cull']).map(g=>`<option value="${esc(g)}" ${st.grade===g?'selected':''}>${esc(g)}</option>`).join('')}</select><label style="margin-top:8px;">Cold chain kept (cool and shaded)?</label><select id="ccSel" onchange="st.coldChain=this.value"><option value="" ${!st.coldChain?'selected':''}>Choose Yes or No</option><option value="yes" ${st.coldChain==='yes'?'selected':''}>Yes</option><option value="no" ${st.coldChain==='no'?'selected':''}>No</option></select>`:''}
+      ${s.activityId==='ACT_018'?bedScanHtml_(s):''}
       ${s.activityId==='ACT_018'?`<div class="chk"><input type="checkbox" id="finalChk" ${st.isFinal?'checked':''} onchange="st.isFinal=this.checked"><label for="finalChk" style="margin:0;">Final harvest for this cohort</label></div>`:''}
       <label style="margin-top:8px;">Notes (optional)</label><input type="text" value="${esc(st.notes)}" oninput="st.notes=this.value">
       <div class="row">
@@ -757,7 +844,8 @@ function renderScan(){
  <p class="sub">Scan or Enter QR Code</p>
  <input type="text" placeholder="e.g. B1-01" value="${esc(st.scanQuery)}"
    oninput="onScanQueryInput(this.value)" onkeydown="if(event.key==='Enter')processScan()">
- <button class="btn block" style="margin-top:10px;" onclick="processScan()">Process Scan</button>
+ <div class="row"><button class="btn secondary" type="button" onclick="openCamera_('startbed')">📷 Scan with camera</button><button class="btn" onclick="processScan()">Process Scan</button></div>
+ ${st.scanBusy?'<p class="sub">Checking the code…</p>':''}
  ${errBanner()}
  <p class="sub" style="margin-top:18px;">Or Search Beds (no camera needed)</p>
  <input id="bedSearchBox" type="text" placeholder="Type a bed ID or block prefix (B1, B2, B3, B4, Z5)" value="${esc(st.scanQuery)}"
@@ -819,7 +907,7 @@ function updateTimers(){
    PACKHOUSE FLOOR (Worker / Technician): dock receiving by scan, grade, wash, dry, cool, store, pack, case label, pickup.
    Holds, discards, dwell acknowledgement and closeout stay manager-only (the server refuses them for workers anyway).
    ========================================================================== */
-const PHW = { d: null, who: '', at: 0, tab: 'receive', open: null, msg: '', scan: '', label: null };
+const PHW = { d: null, who: '', at: 0, tab: 'receive', open: null, msg: '', scan: '', label: null, trace: { code: '', res: null, msg: '' } };
 const phOK_ = () => !!st.me && /^(worker|technician)$/i.test(String(st.me.role || ''));
 const phq = (s, r) => (r || document).querySelector(s), phqa = (s, r) => Array.from((r || document).querySelectorAll(s));
 const phLb = n => (n == null || n === '' || isNaN(n)) ? '' : (Math.round(n * 100) / 100) + ' lb';
@@ -844,18 +932,18 @@ async function phLoad() {
 function renderPackhouse() { return `${header()}\n${tabsHtml_('packhouse')}\n<h1>Packhouse</h1>${errBanner()}<div id="ph-root"></div>`; }
 function phMount() {
   const who = st.me ? st.me.workerId : '';
-  if (PHW.who !== who) Object.assign(PHW, { d: null, who, at: 0, tab: 'receive', open: null, msg: '', scan: '', label: null });
+  if (PHW.who !== who) Object.assign(PHW, { d: null, who, at: 0, tab: 'receive', open: null, msg: '', scan: '', label: null, trace: { code: '', res: null, msg: '' } });
   phPaint(); if (!PHW.d || Date.now() - PHW.at > 10000) phLoad();
 }
 function phPaint() {
   const root = phq('#ph-root'), d = PHW.d; if (!root) return;
-  const tabs = [['receive', 'Receive'], ['lots', 'Lots'], ['pack', 'Pack']].map(t => `<div class="chip ${PHW.tab === t[0] ? 'on' : ''}" data-ph="tab" data-tab="${t[0]}">${t[1]}</div>`).join('');
+  const tabs = [['receive', 'Receive'], ['lots', 'Lots'], ['pack', 'Pack'], ['trace', 'Trace']].map(t => `<div class="chip ${PHW.tab === t[0] ? 'on' : ''}" data-ph="tab" data-tab="${t[0]}">${t[1]}</div>`).join('');
   const msg = PHW.msg ? `<div class="banner" style="background:var(--accent)">${esc(PHW.msg)}</div>` : '';
-  root.innerHTML = `<div class="chips">${tabs}</div>${msg}` + (!d ? '<p class="sub">Loading…</p>' : ({ receive: phReceive, lots: phLots, pack: phPack }[PHW.tab])(d));
+  root.innerHTML = `<div class="chips">${tabs}</div>${msg}` + (!d ? '<p class="sub">Loading…</p>' : ({ receive: phReceive, lots: phLots, pack: phPack, trace: phTraceTab }[PHW.tab])(d));
   PHW.msg = '';
 }
 function phReceive(d) {
-  const top = `<label>Scan or type the Intake Lot ID</label><div class="row" style="margin-top:0"><input type="text" id="ph-scan" value="${esc(PHW.scan)}" autocapitalize="characters" autocomplete="off" style="flex:3"><button class="btn secondary" type="button" data-ph="scan" style="flex:1">Find</button></div>`;
+  const top = `<label>Scan or type the Intake Lot ID</label><div class="row" style="margin-top:0"><input type="text" id="ph-scan" value="${esc(PHW.scan)}" autocapitalize="characters" autocomplete="off" style="flex:3"><button class="btn secondary" type="button" data-ph="scan" style="flex:1">Find</button><button class="btn secondary" type="button" style="flex:1" onclick="openCamera_('recv')">📷</button></div>`;
   let list = d.incoming.map((h, i) => [h, i]);
   if (PHW.scan) list = list.filter(x => phNorm(x[0].intakeLotId) === PHW.scan || phNorm(x[0].harvestId) === PHW.scan);
   const all = PHW.scan ? '<span class="link" data-ph="clearscan">Show all lots at the dock</span>' : '';
@@ -905,6 +993,37 @@ function phPack(d) {
     <div class="row"><button class="btn secondary" type="button" data-ph="label" data-pack="${esc(b.packId)}">Print case label</button></div></div>`).join('')
     + `<div data-form="pickup">${phIn('pickedUpBy', 'Collected by', 'autocomplete="off"')}${phErr}<button class="btn block" style="margin-top:10px" type="button" data-ph="pickup">Hand over ticked boxes</button></div>` : '<p class="sub">No boxes are waiting for pickup.</p>');
 }
+/* ---- Trace a case (trace-case, read only): case code -> intake lot -> bed, harvest, dock, grading, wash, drying, dispatch ---- */
+function phTraceTab() {
+  const t = PHW.trace;
+  return `<label>Scan or type the case code</label><div class="row" style="margin-top:0"><input type="text" id="ph-trace" value="${esc(t.code)}" autocapitalize="characters" autocomplete="off" placeholder="CASE-261102-0042-001" style="flex:3"><button class="btn secondary" type="button" data-ph="trace" style="flex:1">Trace</button><button class="btn secondary" type="button" style="flex:1" onclick="openCamera_('trace')">📷</button></div>`
+    + (t.msg ? `<p class="err">${esc(t.msg)}</p>` : '') + (t.res ? phTraceHtml(t.res) : '<p class="sub">Shows where a case came from (bed, harvest, dock, grading, wash, drying) and where it went.</p>');
+}
+async function phTrace_(raw) {
+  const code = phNorm(raw);
+  PHW.trace = { code, res: null, msg: code ? 'Looking up…' : 'Scan or type a case code.' };
+  phPaint(); if (!code) return;
+  try { PHW.trace.res = await phApi('trace-case', { caseCode: code }); PHW.trace.msg = ''; } catch (e) { PHW.trace.msg = e.message; }
+  phPaint();
+}
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'ph-trace') { e.preventDefault(); phTrace_(e.target.value); } });
+function phTraceHtml(r) {
+  const T = s => { if (!s) return ''; const d = new Date(s); return isNaN(d) ? String(s) : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
+  const YN = v => v === true || /^(true|yes)$/i.test(String(v)) ? 'Yes' : (v === false || /^(false|no)$/i.test(String(v)) ? 'No' : (v == null ? '' : String(v)));
+  const row = (k, v) => (v === '' || v == null) ? '' : `<div class="detail-row"><span class="sub">${esc(k)}:</span> ${esc(v)}</div>`;
+  const sec = (title, body) => body ? `<div class="card"><b>${esc(title)}</b>${body}</div>` : '';
+  const c = r.case || {}, il = r.intakeLot || {}, hv = r.harvest || {}, tm = r.timer || {}, dk = (r.dockReceiving || [])[0] || {}, gr = (r.grading || [])[0] || {},
+    ws = (r.wash || []).slice(-1)[0] || {}, dr = (r.drying || [])[0] || {};
+  const sib = (r.siblingCases || []).filter(x => x.caseCode !== r.caseCode);
+  return sec('Case ' + r.caseCode, row('Status', c.Status) + row('Restaurant', c.Restaurant) + row('Packed', (c.Package_Count ? c.Package_Count + ' × ' : '') + String(c.Format || '').toLowerCase() + (c.Packed_Weight_Lb ? ' · ' + phLb(c.Packed_Weight_Lb) : '')) + row('Packed at', T(c.Created_Time)) + row('Grade', c.Grade) + row('Labels printed', c.Label_Print_Count))
+    + sec('Field', row('Intake lot', c.Intake_Lot_ID) + row('Crop', c.Crop_ID) + row('Bed', c.Bed_ID) + row('Cohort', c.Cohort_ID) + row('Cut', T(il.Cut_Time)) + row('Picked by', il.Worker_ID || hv.Worker_ID) + row('Bed confirmed by', hv.Bed_Scan ? (hv.Bed_Scan === 'QR' ? 'QR scan' : 'typed bed ID') : 'not recorded') + row('Cold chain in field', YN(hv.ColdChain_Compliant)))
+    + sec('Dock', row('Received', T(dk.Received_Time)) + row('Scale weight', dk.Scale_Weight_Lb ? phLb(dk.Scale_Weight_Lb) : '') + row('Field to dock', dk.Transit_Min !== '' && dk.Transit_Min != null ? dk.Transit_Min + ' min' : '') + row('Within 90 min', YN(dk.Within_90)) + row('90-minute exception', tm.Exception_Status))
+    + sec('Grading', row('Grade', gr.Grade) + row('Accepted', gr.Accepted_Lb !== '' && gr.Accepted_Lb != null ? phLb(gr.Accepted_Lb) : '') + row('Cull', gr.Cull_Lb !== '' && gr.Cull_Lb != null ? phLb(gr.Cull_Lb) : '') + row('Cull reason', gr.Rejection_Reason))
+    + sec('Wash', ws.Wash_ID ? row('Washed', T(ws.Wash_Time)) + row('PAA (ppm)', ws.PAA_Ppm) + row('pH', ws.pH) + row('Water temp (F)', ws.Water_Temp_F) + row('Turbidity (NTU)', ws.Turbidity_NTU) + row('Water changes', ws.Water_Changes) + row('Within limits', YN(ws.Within_Limits)) : '')
+    + sec('Drying', dr.Drying_ID ? row('Equipment', dr.Equipment) + row('Minutes', dr.Duration_Min) + row('Done', T(dr.Completed_Time)) : '')
+    + sec('Left the building', (r.dispatch || []).map(d => row(d.Dispatch_ID, T(d.Departure_Time) + (d.Restaurant ? ' · ' + d.Restaurant : ''))).join(''))
+    + sec('Other cases from this intake lot', sib.map(x => row(x.caseCode, x.status + (x.restaurant ? ' · ' + x.restaurant : ''))).join(''));
+}
 function phLabelOverlay() {
   const l = PHW.label;
   return `<div class="lotov" id="lotSticker"><div class="lotbox"><div class="lotlabel"><div class="lotmeta">NGAPORI RANCH · CASE${l.reprint ? ' · REPRINT ' + l.printCount : ''}</div><div class="lotid">${esc(l.caseCode)}</div>${code39Svg_(l.caseCode, 60)}
@@ -920,6 +1039,7 @@ document.addEventListener('click', async e => {
   if (a === 'tab') { PHW.tab = t.dataset.tab; PHW.open = null; phPaint(); return phLoad(); }
   if (a === 'open') { const same = PHW.open && PHW.open.lotId === t.dataset.lot && PHW.open.step === t.dataset.step; PHW.open = same ? null : { lotId: t.dataset.lot, step: t.dataset.step }; return phPaint(); }
   if (a === 'scan') return phScan_();
+  if (a === 'trace') { const el = phq('#ph-trace'); return phTrace_(el ? el.value : ''); }
   if (a === 'clearscan') { PHW.scan = ''; return phPaint(); }
   if (a === 'unlabel') { PHW.label = null; return render(); }
   const v = {}, err = form && phq('.err', form);
