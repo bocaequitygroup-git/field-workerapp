@@ -348,23 +348,31 @@ async function syncActiveSessionsCore_(force){
  if(handleAuthError(r))return;
  const rc=await api('get-my-completed',{});
  if(handleAuthError(rc))return;
- if(rc&&rc.ok&&Array.isArray(rc.data)){st.serverDone=rc.data.map(mapServerDone_).filter(x=>x.id&&!isNaN(x.endTime));st.doneErr=null;}
+ if(rc&&rc.ok&&Array.isArray(rc.data)){st.serverDone=rc.data.filter(x=>!/reassigned/i.test(String(x.outcomeFlags||x.Outcome_Flags||''))).map(mapServerDone_).filter(x=>x.id&&!isNaN(x.endTime));st.doneErr=null;}
  else{ st.doneErr=(rc&&(rc.code||rc.error))||'NO_REPLY'; }   // keep the last good copy, but TELL the worker (Log tab shows a red notice)
  // A slow answer that left BEFORE the worker tapped Start/Complete describes the old state. Applying it put the card back to
  // 'Start' / 'Complete' after the tap had worked, which is why the worker had to tap again. Only the newest, post-tap answer counts.
  if(seq!==syncSeq||startedAt<st.lastChange)return;
  if(!r.ok){st.err=r.error||'Could not refresh your sessions.';render();return;}
- const localOnly=allSessions().filter(s=>s.workerId===st.me.workerId&&s.status==='completed');
+ const CLOSED_=/^(COMPLETED|COMPLETE|ENDED|CLOSED|CANCELLED|CANCELED|REASSIGNED|ABANDONED)$/;
+ // What the SERVER says is still open for this worker. This is the truth: a task the server lists as open is never shown as completed.
+ const liveRows=(r.data||[]).filter(x=>!CLOSED_.test(String(x.Status||'').trim().toUpperCase())&&!String(x.End_Time||'').trim());
+ const liveIds={};liveRows.forEach(x=>{liveIds[x.Session_ID]=1;});
+ const GRACE_MS=3*60000;   // a server answer this soon after a Complete tap may not have caught up yet
+ let localOnly=allSessions().filter(s=>s.workerId===st.me.workerId&&s.status==='completed');
+ const staleDone=localOnly.filter(x=>liveIds[x.id]&&Date.now()-(x.endTime||0)>GRACE_MS);   // phone says done, server says open, and it is not a race: the phone is wrong
+ if(staleDone.length){const gone={};staleDone.forEach(x=>{gone[x.id]=1;});saveSessions(allSessions().filter(x=>!(gone[x.id]&&x.workerId===st.me.workerId)));localOnly=localOnly.filter(x=>!gone[x.id]);}
+ const recentDone={};localOnly.forEach(x=>{if(Date.now()-(x.endTime||0)<=GRACE_MS)recentDone[x.id]=1;});
  const haveLocal={};localOnly.forEach(x=>{haveLocal[x.id]=1;});
- const localCompleted=localOnly.concat((st.serverDone||[]).filter(x=>!haveLocal[x.id]));   // this device's own row wins; the server adds the rest
+ // History rows for a session that is still open are hand-off records (a reassignment writes one), not completions.
+ const localCompleted=localOnly.concat((st.serverDone||[]).filter(x=>!haveLocal[x.id]&&!liveIds[x.id]));   // this device's own row wins; the server adds the rest
  // FIX: get-my-sessions can still return a row that is already finished (workbook says COMPLETED), and this
  // mapper used to turn anything that was not PAUSED/ASSIGNED into 'active' - so a task you just completed
  // came straight back as a running card (timer counting from its start time) next to its Completed History
  // entry. Closed rows are dropped here, and so is any session this device has already completed, in case the
  // server answers a moment before it has caught up.
- const CLOSED_=/^(COMPLETED|COMPLETE|ENDED|CLOSED|CANCELLED|CANCELED|REASSIGNED|ABANDONED)$/;
  const doneIds={};localCompleted.forEach(x=>{doneIds[x.id]=1;});
- let serverActive=(r.data||[]).filter(x=>!CLOSED_.test(String(x.Status||'').trim().toUpperCase())&&!String(x.End_Time||'').trim()&&!doneIds[x.Session_ID]).map(mapServerSession_).map(x=>{ const mid=st.pending[x.id]&&st.sessions.find(c=>c.id===x.id); return mid||x; });   // a card mid-action keeps its on-screen state
+ let serverActive=liveRows.filter(x=>!recentDone[x.Session_ID]).map(mapServerSession_).map(x=>{ const mid=st.pending[x.id]&&st.sessions.find(c=>c.id===x.id); return mid||x; });   // a card mid-action keeps its on-screen state
  // A Start the worker already confirmed is trusted for HOLD_MS: if the server still lists it as waiting (or has not listed it yet),
  // keep it ACTIVE instead of flipping the card back to \"Start\". Once the server agrees, the hold is dropped.
  const now=Date.now();
@@ -438,10 +446,15 @@ async function findLiveSession_(bedId,activityName){
  const rows=await mySessionRows_();if(!rows)return null;
  return rows.find(x=>x.Bed_ID===bedId&&x.Activity_Name===activityName&&LIVE_STATUS_.test(String(x.Status||'').trim().toUpperCase())&&!String(x.End_Time||'').trim())||null;
 }
+/** True ONLY with positive proof the server closed the session: its row says COMPLETED / has an End_Time, or it is in the worker's
+ *  completed history. A row that is merely missing from get-my-sessions is NOT proof (that used to be treated as "closed", which
+ *  recorded tasks as completed on the phone while the server still had them open). Any failed lookup counts as "not closed". */
 async function sessionIsClosed_(id){
  const rows=await mySessionRows_();if(!rows)return false;
  const row=rows.find(x=>x.Session_ID===id);
- return !row||!LIVE_STATUS_.test(String(row.Status||'').trim().toUpperCase())||!!String(row.End_Time||'').trim();
+ if(row)return !LIVE_STATUS_.test(String(row.Status||'').trim().toUpperCase())||!!String(row.End_Time||'').trim();
+ const rc=await api('get-my-completed',{});
+ return !!(rc&&rc.ok&&Array.isArray(rc.data)&&rc.data.some(x=>(x.id||x.logId)===id&&!/reassigned/i.test(String(x.outcomeFlags||x.Outcome_Flags||''))));
 }
 async function confirmStart(src){
  if(st.startingId||st.busy)return;
