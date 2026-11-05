@@ -110,15 +110,30 @@ select{width:100%;padding:12px;border-radius:var(--radius);border:1.5px solid va
 const API_URL='https://script.google.com/macros/s/AKfycbw0dOXaMs3iykTuhv3heOMyQck0i8dJYjO_To60lIOtsYGuL1Lshmxju8Gopt3SWKNy/exec';
 const APP_KEY='WorkerApp';
 
+/* Read-only actions are safe to repeat, so a transient failure (Apps Script hiccup, dropped signal) is retried
+   quietly instead of surfacing "The server could not complete that request." Writes are NEVER blindly retried
+   (a repeated start/pause/end could double-record); they are reconciled against the server instead. */
+const READ_ACTIONS_={'get-my-sessions':1,'get-my-completed':1,'scan-bed':1};
+const sleep_=ms=>new Promise(t=>setTimeout(t,ms));
 async function api(action,payload){
+ let r=await apiOnce_(action,payload);
+ if(READ_ACTIONS_[action]){
+  for(let i=0;i<2&&isTransient_(r);i++){ await sleep_(800*(i+1)); r=await apiOnce_(action,payload); }
+ }
+ return r;
+}
+async function apiOnce_(action,payload){
  payload=Object.assign({action:action},payload||{});
  if(st.token && action!=='login') payload.token=st.token;
  const ctl=(typeof AbortController!=='undefined')?new AbortController():null;
  const timer=ctl?setTimeout(()=>ctl.abort(),60000):null;   // never leave a button stuck on a request that will not answer
  try{
   const res=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),signal:ctl?ctl.signal:undefined});
-  const r=await res.json();
+  let r;
+  try{ r=await res.json(); }
+  catch(pe){ st.connected=true; return {ok:false,error:'The server sent a reply this app could not read. Try again.',code:'SERVER_ERROR'}; }   // Apps Script error page, not JSON
   st.connected=true;
+  if(r&&r.ok===false&&!r.code&&/could not complete that request/i.test(String(r.error||'')))r.code='SERVER_ERROR';   // backend catch-all: treat as transient
   return r;
  }catch(e){ st.connected=false; return {ok:false,error:'Could not reach the server. Check your connection.',code:'NETWORK_ERROR'}; }
  finally{ if(timer)clearTimeout(timer); }
@@ -217,7 +232,7 @@ function shortName(n){return(n||'').trim().split(/\s+/)[0]||n;}
    Completed rows: the Log tab merges this device's own localStorage with the server's 'get-my-completed'
    (WorkerLog.gs, read from FIELD_ACTIVITY_LOG, scoped to the logged-in worker), so a task finished on
    ANOTHER device, or closed by a manager, shows here too. If that route is not deployed or fails, the
-   Log silently falls back to this device's own rows. */
+   Log shows a red notice (st.doneErr) saying only this device's tasks are listed. It never pretends the history is empty. */
 /** FIELD_ACTIVITY_LOG row (from get-my-completed) -> the completed-session shape the Log tab reads. */
 function mapServerDone_(r){
  const a=actByName(r.activityName)||{};
@@ -328,9 +343,13 @@ async function syncActiveSessions_(force){
 async function syncActiveSessionsCore_(force){
  if(!st.me)return;
  const seq=++syncSeq, startedAt=Date.now();
- const [r,rc]=await Promise.all([api('get-my-sessions',{}),api('get-my-completed',{})]);
+ // One at a time: two simultaneous POSTs to an Apps Script web app is a common cause of the generic server error.
+ const r=await api('get-my-sessions',{});
  if(handleAuthError(r))return;
- if(rc&&rc.ok&&Array.isArray(rc.data))st.serverDone=rc.data.map(mapServerDone_).filter(x=>x.id&&!isNaN(x.endTime));   // on failure keep the last good copy
+ const rc=await api('get-my-completed',{});
+ if(handleAuthError(rc))return;
+ if(rc&&rc.ok&&Array.isArray(rc.data)){st.serverDone=rc.data.map(mapServerDone_).filter(x=>x.id&&!isNaN(x.endTime));st.doneErr=null;}
+ else{ st.doneErr=(rc&&(rc.code||rc.error))||'NO_REPLY'; }   // keep the last good copy, but TELL the worker (Log tab shows a red notice)
  // A slow answer that left BEFORE the worker tapped Start/Complete describes the old state. Applying it put the card back to
  // 'Start' / 'Complete' after the tap had worked, which is why the worker had to tap again. Only the newest, post-tap answer counts.
  if(seq!==syncSeq||startedAt<st.lastChange)return;
@@ -411,6 +430,7 @@ function selectAct(id){st.selAct=actById(id);render();}
    Each session has its own pending state, so one card's action never disables or resets another. If the reply is lost
    (slow Apps Script, dropped signal) the app asks the server what happened before showing a failure, so a tap that
    actually worked is never reported as failed and never has to be repeated. */
+function friendlyErr_(r,fallback){ return isTransient_(r)?'The server is slow or busy right now, nothing was lost. Wait a moment and tap again.':(r.error||fallback); }
 function isTransient_(r){return !!r&&!r.ok&&(r.code==='NETWORK_ERROR'||r.code==='SERVER_ERROR');}
 const LIVE_STATUS_=/^(ACTIVE|PAUSED|EXCEPTION)$/;
 async function mySessionRows_(){const r=await api('get-my-sessions',{});return(r&&r.ok&&Array.isArray(r.data))?r.data:null;}
@@ -434,7 +454,7 @@ async function confirmStart(src){
  if(handleAuthError(r)){st.startingId=null;return;}
  if(isTransient_(r)){const live=await findLiveSession_(bedId,act.name);if(live)r={ok:true,data:{sessionId:live.Session_ID}};}   // it did start; only the reply was lost
  st.startingId=null;st.lastChange=Date.now();
- if(!r.ok){st.err=r.error||('Could not start that activity ('+(r.code||'error')+').');render();return;}
+ if(!r.ok){st.err=friendlyErr_(r,('Could not start that activity ('+(r.code||'error')+').'));render();return;}
  const arr=allSessions();
  if(!arr.some(x=>x.id===r.data.sessionId))arr.push({id:r.data.sessionId,workerId:st.me.workerId,bedId:bedId,block:bedBlock(bedId),
   activityId:act.id,activityName:act.name,qtyBased:act.qtyBased,unit:act.unit,isFertilizer:/fertiliz|fertigat/i.test(act.name||''),
@@ -468,7 +488,7 @@ async function confirmStartAssigned(id,bedId,activityName){
  if(handleAuthError(r)){delete st.pending[id];return;}
  if(isTransient_(r)&&await findLiveSession_(bedId,activityName))r={ok:true};   // it did start; only the reply was lost
  delete st.pending[id];st.lastChange=Date.now();
- if(!r.ok){st.cardErr[id]=r.error||('Could not start that activity ('+(r.code||'error')+'). Tap Start to try again.');render();return;}
+ if(!r.ok){st.cardErr[id]=friendlyErr_(r,('Could not start that activity ('+(r.code||'error')+'). Tap Start to try again.'));render();return;}
  const cur=st.sessions.find(x=>x.id===id);   // running right away; the sync below brings the real Start_Time
  if(cur){
   cur.status='active';cur.startTime=Date.now();cur.totalPausedMs=0;cur.pausedAt=null;
@@ -501,10 +521,11 @@ function cancelPause(){st.pausingId=null;render();}
 async function confirmPause(id){
  if(st.busy||!st.pauseReason)return;
  st.busy=true;st.err=null;render();
- const r=await api('pause-activity',{sessionId:id,reason:st.pauseReason});
+ let r=await api('pause-activity',{sessionId:id,reason:st.pauseReason});
+ if(isTransient_(r)){const rows=await mySessionRows_();const row=rows&&rows.find(x=>x.Session_ID===id);if(row&&String(row.Status||'').toUpperCase()==='PAUSED')r={ok:true};}   // it paused; only the reply was lost
  st.busy=false;
  if(handleAuthError(r))return;
- if(!r.ok){st.err=r.error||('Could not pause that task ('+(r.code||'error')+').');render();return;}
+ if(!r.ok){st.err=friendlyErr_(r,('Could not pause that task ('+(r.code||'error')+').'));render();return;}
  st.pausingId=null;
  localUpdate(id,{status:'paused',pausedAt:Date.now(),pauseType:st.pauseReason});render();
 }
@@ -512,10 +533,11 @@ async function resumeS(id){
  if(st.busy)return;
  const s=st.sessions.find(x=>x.id===id);st.err=null;
  st.busy=true;render();
- const r=await api('resume-activity',{sessionId:id});
+ let r=await api('resume-activity',{sessionId:id});
+ if(isTransient_(r)){const rows=await mySessionRows_();const row=rows&&rows.find(x=>x.Session_ID===id);if(row&&String(row.Status||'').toUpperCase()==='ACTIVE')r={ok:true};}   // it resumed; only the reply was lost
  st.busy=false;
  if(handleAuthError(r))return;
- if(!r.ok){st.err=r.error||('Could not resume that task ('+(r.code||'error')+').');render();return;}
+ if(!r.ok){st.err=friendlyErr_(r,('Could not resume that task ('+(r.code||'error')+').'));render();return;}
  localUpdate(id,{status:'active',pausedAt:null,pauseType:'',totalPausedMs:(s.totalPausedMs||0)+(Date.now()-s.pausedAt)});render();
 }
 /* ---- Fertilizer (GovernanceEngine.gs): the manager enters type, brand and quantity when assigning the task. The worker only sees them. ---- */
@@ -536,7 +558,7 @@ async function confirmComplete(id){
  delete st.pending[id];
  if(!r.ok&&/^BED_SCAN_/.test(r.code||''))st.bedScan=null;
  if(!r.ok&&r.code==='INVALID_GRADE'){st.grade='';if(Array.isArray(r.allowed)&&r.allowed.length)s.grades=r.allowed;}
- if(!r.ok){st.cardErr[id]=r.error||('Could not complete that task ('+(r.code||'error')+'). Tap Confirm Complete to try again.');render();return;}
+ if(!r.ok){st.cardErr[id]=friendlyErr_(r,('Could not complete that task ('+(r.code||'error')+'). Tap Confirm Complete to try again.'));render();return;}
  delete st.holds[id];
  localUpdate(id,{status:'completed',endTime:Date.now()});
  st.completingId=null;
@@ -710,7 +732,7 @@ function filteredLog_(){
 }
 function logListHtml_(){
  const rows=filteredLog_();
- if(!rows.length)return `<p class="sub" style="margin-top:14px;">${doneRows_().length?'No completed tasks match these filters.':'No completed tasks yet.'}</p>`;
+ if(!rows.length)return `<p class="sub" style="margin-top:14px;">${doneRows_().length?'No completed tasks match these filters.':(st.doneErr?'No completed tasks on this device. Your server history could not be loaded.':'No completed tasks yet.')}</p>`;
  const total=rows.reduce((a,s)=>a+Math.max(0,elapsed(s)),0);
  let out=`<div class="logsum"><span><b>${rows.length}</b> task${rows.length===1?'':'s'}</span><span>Total time <b>${fmt(total)}</b></span></div>`;
  const groups={},order=[];
@@ -739,6 +761,7 @@ function renderLog(){
  <div class="row" style="margin-bottom:2px;"><h1 style="flex:2;">Completed Log</h1>
   <button class="btn secondary" style="flex:1;" ${st.syncing?'disabled':''} onclick="syncActiveSessions_(true)">${st.syncing?'<span class="spin" style="display:inline-block;vertical-align:-3px;margin-right:6px;"></span>Refreshing…':'Refresh'}</button></div>
  ${errBanner()}
+ ${st.doneErr?`<div class="banner">Could not load your full history from the server (${esc(st.doneErr)}). Only tasks finished on this device are shown. Tap Refresh to retry.</div>`:''}
  <div class="chips">${chip('today','Today')}${chip('7d','Last 7 days')}${chip('all','All')}</div>
  <div class="filters">
   <select onchange="setLog_('logAct',this.value)">${opt('',st.logAct,'All activities')}${acts.map(a=>opt(a,st.logAct,a)).join('')}</select>
