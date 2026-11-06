@@ -165,7 +165,7 @@ const COHORT_SNAPSHOT={'BET-C01':{cropId:'BET',cropName:'Beets'}};
 // Bed_ID -> [{activityName,workerId,endTime|startTime}], from FIELD_ACTIVITY_LOG. Currently empty workbook-wide.
 const ACTIVITY_LOG_SNAPSHOT={};
 
-// From ACTIVITY_REFERENCE (23 rows). workerExec mirrors Is_Worker_Executable exactly --
+// From ACTIVITY_REFERENCE (24 rows, incl. ACT_031 Irrigation). workerExec mirrors Is_Worker_Executable exactly --
 // only ACT_021 StateChange is manager-only and excluded from the worker picklist.
 const ACTIVITIES=[
  {id:'ACT_001',name:'FieldPrep',domain:'Prep',qtyBased:false,unit:'',workerExec:true},
@@ -181,6 +181,7 @@ const ACTIVITIES=[
  {id:'ACT_011',name:'Weeding',domain:'CropCare',qtyBased:false,unit:'',workerExec:true},
  {id:'ACT_012',name:'Fertilizing',domain:'CropCare',qtyBased:true,unit:'lbs',workerExec:true},
  {id:'ACT_013',name:'IrrigationCheck',domain:'CropCare',qtyBased:false,unit:'',workerExec:true},
+ {id:'ACT_031',name:'Irrigation',domain:'CropCare',qtyBased:true,unit:'gal',workerExec:true},   // the watering event itself (ACTIVITY_REFERENCE: quantity-based, gal)
  {id:'ACT_014',name:'PestControl',domain:'CropCare',qtyBased:false,unit:'',workerExec:true},
  {id:'ACT_015',name:'DiseaseControl',domain:'CropCare',qtyBased:false,unit:'',workerExec:true},
  {id:'ACT_016',name:'Pruning',domain:'CropCare',qtyBased:false,unit:'',workerExec:true},
@@ -194,12 +195,10 @@ const ACTIVITIES=[
 ];
 function actById(id){return ACTIVITIES.find(a=>a.id===id);}
 
-// Field Actions shortcuts. NOTE: ACTIVITY_REFERENCE has no literal "apply/run water" activity --
-// IrrigationCheck ("Validate irrigation performance and detect anomalies") is the closest CropCare-stage
-// match to "Log Water Pass" and is used here as a best guess. Please confirm this is the intended
-// mapping (or tell me the correct Activity_ID) before relying on it.
+// Field Actions shortcuts. "Log Water Pass" starts ACT_031 Irrigation (the watering event the irrigation calendar counts).
+// ACT_013 IrrigationCheck (validate performance / detect anomalies) is a different activity and stays in the full activity list.
 const QUICK_ACTIONS=[
- {id:'ACT_013',icon:'💧',label:'Log Water Pass'},
+ {id:'ACT_031',icon:'💧',label:'Log Water Pass'},
  {id:'ACT_012',icon:'🧪',label:'Log Fertilizer'},
  {id:'ACT_011',icon:'🌿',label:'Log Weeding'}
 ];
@@ -438,7 +437,7 @@ function selectAct(id){st.selAct=actById(id);render();}
    Each session has its own pending state, so one card's action never disables or resets another. If the reply is lost
    (slow Apps Script, dropped signal) the app asks the server what happened before showing a failure, so a tap that
    actually worked is never reported as failed and never has to be repeated. */
-function friendlyErr_(r,fallback){ return isTransient_(r)?'The server is slow or busy right now, nothing was lost. Wait a moment and tap again.':(r.error||fallback); }
+function friendlyErr_(r,fallback){ return isTransient_(r)?'The server is slow or busy right now, nothing was lost. Wait a moment and tap again.':(r&&r.code==='QUANTITY_REQUIRED'?'Enter the gallons applied before finishing.':(r.error||fallback)); }
 function isTransient_(r){return !!r&&!r.ok&&(r.code==='NETWORK_ERROR'||r.code==='SERVER_ERROR');}
 const LIVE_STATUS_=/^(ACTIVE|PAUSED|EXCEPTION)$/;
 async function mySessionRows_(){const r=await api('get-my-sessions',{});return(r&&r.ok&&Array.isArray(r.data))?r.data:null;}
@@ -561,6 +560,7 @@ function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';
 async function confirmComplete(id){
  const s=st.sessions.find(x=>x.id===id);if(!s||st.pending[id])return;
  if(s.activityId==='ACT_018'&&!(Number(st.qty)>0)){st.cardErr[id]='Enter how much was harvested before finishing.';render();return;}
+ if((s.activityId==='ACT_031'||s.activityName==='Irrigation')&&!(Number(st.qty)>0)){st.cardErr[id]='Enter the gallons applied before finishing.';render();return;}
  if(s.activityId==='ACT_018'&&st.coldChain!=='yes'&&st.coldChain!=='no'){st.cardErr[id]='Answer the cold-chain question (Yes or No) before finishing.';render();return;}
  if(s.activityId==='ACT_018'&&st.bedScan&&!st.bedScan.ok){st.cardErr[id]=st.bedScan.msg;render();return;}
  st.pending[id]='completing';delete st.cardErr[id];st.err=null;st.lastChange=Date.now();render();
