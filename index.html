@@ -556,15 +556,19 @@ async function resumeS(id){
 function isFert_(s){return !!s&&s.isFertilizer===true;}
 function fertFromRow_(r){if(!r)return null;const o=r.fertilizer&&typeof r.fertilizer==='object'?r.fertilizer:null;const g=(a,b)=>String((r[a]!=null&&r[a]!=='')?r[a]:(o&&o[b]!=null?o[b]:'')) ;const f={type:g('Fert_Type','type'),brand:g('Fert_Brand','brand'),qty:(r.Fert_Quantity!=null&&r.Fert_Quantity!=='')?r.Fert_Quantity:(o&&o.quantity!=null?o.quantity:''),unit:g('Fert_Unit','unit'),organic:g('Fert_Organic','organic'),method:g('Fert_Method','method'),notes:g('Fert_Notes','notes')};if(!f.type&&!f.brand&&f.qty==='')return null;return f;}
 function fertLine_(s){const f=s&&s.fert;if(!f)return '';const row=(k,v)=>v===''||v==null?'':`<div class="sub"><b>${k}:</b> ${esc(v)}</div>`;const org=f.organic==='ORGANIC'?'Organic':f.organic==='NON_ORGANIC'?'Non-organic':f.organic;return `<div style="margin-top:6px;padding:6px 8px;border:1px solid #bcd6bf;border-radius:8px;background:#EEF5EE;"><div class="sub" style="font-weight:700;">Fertilizer to apply</div>${row('Type',f.type)}${row('Brand',f.brand)}${row('Quantity',(f.qty!==''?f.qty:'')+(f.unit?' '+f.unit:''))}${row('Organic',org)}${row('Method',f.method)}${row('Notes',f.notes)}</div>`;}
-function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain='';st.bedScan=null;st.bedScanRaw='';st.intakeIn='';st.scanBusy=false;render();}
+function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain='';st.bedScan=null;st.bedScanRaw='';st.intakeIn='';st.scanBusy=false;
+ const _cs=st.sessions.find(x=>x.id===id)||{};st.scoutNote=null;st.sc={domain:SCOUT_ACT_DOMAIN_UI_[_cs.activityName]||'PlantCondition',severity:'MEDIUM',symptom:'',requiresAction:false,noIssues:false};st.app={product:'',qty:''};render();}
 async function confirmComplete(id){
  const s=st.sessions.find(x=>x.id===id);if(!s||st.pending[id])return;
  if(s.activityId==='ACT_018'&&!(Number(st.qty)>0)){st.cardErr[id]='Enter how much was harvested before finishing.';render();return;}
  if((s.activityId==='ACT_031'||s.activityName==='Irrigation')&&!(Number(st.qty)>0)){st.cardErr[id]='Enter the gallons applied before finishing.';render();return;}
  if(s.activityId==='ACT_018'&&st.coldChain!=='yes'&&st.coldChain!=='no'){st.cardErr[id]='Answer the cold-chain question (Yes or No) before finishing.';render();return;}
  if(s.activityId==='ACT_018'&&st.bedScan&&!st.bedScan.ok){st.cardErr[id]=st.bedScan.msg;render();return;}
+ const kind=completionKind_(s);
+ if(kind==='SCOUT'&&!st.sc.noIssues&&!String(st.sc.symptom||'').trim()){st.cardErr[id]='Describe what you saw, or tick "No issues found on this walk".';render();return;}
+ if(kind==='CONTROL'&&(!String(st.app.product||'').trim()||!String(st.app.qty||'').trim())){st.cardErr[id]='Enter the product and the quantity applied before finishing.';render();return;}
  st.pending[id]='completing';delete st.cardErr[id];st.err=null;st.lastChange=Date.now();render();
- let r=await api('end-activity',{sessionId:id,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?(st.coldChain==='yes'?true:st.coldChain==='no'?false:undefined):undefined,scannedBed:s.activityId==='ACT_018'?((st.bedScan?st.bedScan.raw:(st.bedScanRaw||'').trim())||undefined):undefined,intakeLotId:s.activityId==='ACT_018'?((st.intakeIn||'').trim()||undefined):undefined});
+ let r=await api('end-activity',{sessionId:id,scoutFinding:kind==='SCOUT'?{domain:st.sc.domain,severity:st.sc.severity,symptom:st.sc.symptom,requiresAction:!!st.sc.requiresAction,noIssues:!!st.sc.noIssues}:undefined,applicationProduct:kind==='CONTROL'?String(st.app.product||'').trim():undefined,applicationQuantity:kind==='CONTROL'?String(st.app.qty||'').trim():undefined,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?(st.coldChain==='yes'?true:st.coldChain==='no'?false:undefined):undefined,scannedBed:s.activityId==='ACT_018'?((st.bedScan?st.bedScan.raw:(st.bedScanRaw||'').trim())||undefined):undefined,intakeLotId:s.activityId==='ACT_018'?((st.intakeIn||'').trim()||undefined):undefined});
  if(handleAuthError(r)){delete st.pending[id];return;}
  // A lost reply, or "not active" because the first tap already closed it: ask the server before calling it a failure.
  if(isTransient_(r)||(!r.ok&&r.code==='SESSION_NOT_ACTIVE')){if(await sessionIsClosed_(id))r={ok:true};}
@@ -581,7 +585,17 @@ async function confirmComplete(id){
   else if(d.harvestLogged===false)st.err=(d.warning||'The harvest log row failed.')+' No lot sticker was issued. Tell the manager.';
   else st.err='Harvest finished, but the lot sticker could not be shown. The manager can find the Intake Lot ID in the harvest log.';
  }
- st.flash[id]='completed';   // card stays on screen for a moment showing \"Completed\", then moves to Completed History
+ if(kind==='SCOUT'){
+  if(r.data&&r.data.scoutFindingError) st.err=r.data.scoutFindingError;
+  else { const sf=(r.data&&r.data.scoutFinding)||{}, ne=(sf.exceptionIds||[]).length;
+    st.scoutNote='Scouting logged'+(ne?' · '+ne+' sent to the manager':'')+'.'; }
+}
+if(kind==='CONTROL'){
+  if(r.data&&r.data.treatError) st.err=r.data.treatError;
+  else { const n=((r.data&&r.data.treatedFindings)||[]).length;
+    st.scoutNote=n?'Application logged · '+n+' open finding'+(n===1?'':'s')+' marked treated.':'Application logged. No open finding on this bed needed treating.'; }
+}
+st.flash[id]='completed';   // card stays on screen for a moment showing \"Completed\", then moves to Completed History
  render();syncActiveSessions_();
  setTimeout(()=>{delete st.flash[id];if(st.screen==='home')render();},1600);
 }
@@ -799,6 +813,7 @@ function renderHome(){
  <button class="btn secondary" style="flex:1;" ${st.syncing?'disabled':''} onclick="syncActiveSessions_(true)">${st.syncing?'<span class="spin" style="display:inline-block;vertical-align:-3px;margin-right:6px;"></span>Refreshing…':'Refresh'}</button></div>
  <p class="sub" style="margin:0 0 10px;">Logged in as ${esc(st.me.name)} (${esc(shortName(st.me.name))})</p>
  ${errBanner()}
+ ${st.scoutNote?`<div class="ok-note">${esc(st.scoutNote)}</div>`:''}
  ${active.length===0?'<p class="sub">No active tasks right now. Scan a bed to start one.</p>':
    active.map(s=>{
     const completing=st.completingId===s.id;
@@ -838,6 +853,7 @@ function renderHome(){
       ${s.activityId==='ACT_018'?`<label style="margin-top:8px;">Grade</label><select onchange="st.grade=this.value"><option value="" ${!st.grade?'selected':''}>Not graded</option>${((s.grades&&s.grades.length)?s.grades:['A','B','C','Cull']).map(g=>`<option value="${esc(g)}" ${st.grade===g?'selected':''}>${esc(g)}</option>`).join('')}</select><label style="margin-top:8px;">Cold chain kept (cool and shaded)?</label><select id="ccSel" onchange="st.coldChain=this.value"><option value="" ${!st.coldChain?'selected':''}>Choose Yes or No</option><option value="yes" ${st.coldChain==='yes'?'selected':''}>Yes</option><option value="no" ${st.coldChain==='no'?'selected':''}>No</option></select>`:''}
       ${s.activityId==='ACT_018'?bedScanHtml_(s):''}
       ${s.activityId==='ACT_018'?`<div class="chk"><input type="checkbox" id="finalChk" ${st.isFinal?'checked':''} onchange="st.isFinal=this.checked"><label for="finalChk" style="margin:0;">Final harvest for this cohort</label></div>`:''}
+      ${completionFormHtml_(s)}
       <label style="margin-top:8px;">Notes (optional)</label><input type="text" value="${esc(st.notes)}" oninput="st.notes=this.value">
       <div class="row">
         <button class="btn secondary" onclick="st.completingId=null;render()">Cancel</button>
@@ -1147,6 +1163,33 @@ async function scoutSubmit_(){
  if(st.scout){ st.scout.busy=false; st.scout.err=r.error||'Could not save the finding ('+(r.code||'error')+').'; }
  render();
 }
+/* ---- Scouting and control completions. A scouting task needs a finding (or "no issues"); a control task needs the product and quantity applied. ---- */
+const SCOUT_ACT_DOMAIN_UI_={Scouting:'PlantCondition',PestScouting:'PestPressure',DiseaseScouting:'DiseasePressure',CropInspection:'PlantCondition'};
+const CONTROL_ACT_UI_={PestControl:1,DiseaseControl:1};
+const SCOUT_SEV_LIST_=['LOW','MEDIUM','HIGH','CRITICAL'];
+const SCOUT_TYPE_LIST_=[['PlantCondition','Plant condition'],['PestPressure','Pest pressure'],['DiseasePressure','Disease'],['WeedCompetition','Weed competition'],['SoilWater','Soil / water']];
+function completionKind_(s){ const n=(s&&s.activityName)||''; if(SCOUT_ACT_DOMAIN_UI_[n]) return 'SCOUT'; if(CONTROL_ACT_UI_[n]) return 'CONTROL'; return ''; }
+function completionFormHtml_(s){
+ const kind=completionKind_(s);
+ if(kind==='SCOUT'){
+  const d=st.sc;
+  return `<div class="sub" style="font-weight:700;margin:10px 0 4px;">Scouting finding (required)</div>
+   <label>Finding type</label><select onchange="st.sc.domain=this.value">${SCOUT_TYPE_LIST_.map(([v,l])=>`<option value="${v}" ${d.domain===v?'selected':''}>${esc(l)}</option>`).join('')}</select>
+   <label style="margin-top:8px;">Severity</label><select onchange="st.sc.severity=this.value">${SCOUT_SEV_LIST_.map(v=>`<option value="${v}" ${d.severity===v?'selected':''}>${v.charAt(0)+v.slice(1).toLowerCase()}</option>`).join('')}</select>
+   <div class="chk"><input type="checkbox" id="noIssues" ${d.noIssues?'checked':''} onchange="st.sc.noIssues=this.checked;render()"><label for="noIssues" style="margin:0;">No issues found on this walk</label></div>
+   ${d.noIssues?'':`<label style="margin-top:8px;">What did you see?</label><input type="text" maxlength="200" value="${esc(d.symptom)}" oninput="st.sc.symptom=this.value" placeholder="e.g. aphids on outer leaves">`}
+   <div class="chk"><input type="checkbox" id="needsAct" ${d.requiresAction?'checked':''} ${d.noIssues?'disabled':''} onchange="st.sc.requiresAction=this.checked"><label for="needsAct" style="margin:0;">Needs manager action</label></div>`;
+ }
+ if(kind==='CONTROL'){
+  const a=st.app;
+  return `<div class="sub" style="font-weight:700;margin:10px 0 4px;">What was applied (required)</div>
+   <label>Product</label><input type="text" maxlength="100" value="${esc(a.product)}" oninput="st.app.product=this.value" placeholder="e.g. Neem oil">
+   <label style="margin-top:8px;">Quantity and rate</label><input type="text" maxlength="50" value="${esc(a.qty)}" oninput="st.app.qty=this.value" placeholder="e.g. 2 L in 20 L water">
+   <p class="sub" style="margin:6px 0 0;">Open scouting findings on this bed for this pest or disease are marked treated when you finish.</p>`;
+ }
+ return '';
+}
+
 function render(){
  const el=document.getElementById('app');
  if(st.screen==='login')el.innerHTML=renderLogin();
