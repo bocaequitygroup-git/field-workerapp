@@ -915,6 +915,8 @@ function renderAssignment(){
   ${st.showHistory?bedHistoryHtml(d.bedId):''}
  </div>
  ${errBanner()}
+ ${st.scoutNote?`<div class="ok-note">${esc(st.scoutNote)}</div>`:''}
+ <button class="btn secondary block" style="margin-top:8px;" onclick="scoutOpen_()">🔎 Log scouting finding</button>
  <h1 style="font-size:16px;margin-top:16px;">Field Actions</h1>
  <div class="qa-grid">${quick}</div>
  <p class="link" onclick="st.showAllActs=!st.showAllActs;render()">${st.showAllActs?'▾':'▸'} Or Choose Any Activity</p>
@@ -1108,6 +1110,43 @@ document.addEventListener('click', async e => {
   finally { t.disabled = false; }
 });
 
+/* ---- Scouting finding (submit-scout-finding). A worker logs an observation for one or more beds. ---- */
+const SCOUT_DOMAINS_UI_=[['PestPressure','Pest pressure'],['DiseasePressure','Disease'],['PlantCondition','Plant condition'],['WeedCompetition','Weed competition'],['SoilWater','Soil / water']];
+const SCOUT_SEV_UI_=['LOW','MEDIUM','HIGH','CRITICAL'];
+function scoutOpen_(){ st.scoutNote=null; st.scout={beds:st.selBed||'',domain:'PestPressure',severity:'MEDIUM',symptom:'',notes:'',requiresAction:false,busy:false,err:null}; render(); }
+function scoutClose_(){ st.scout=null; render(); }
+function scoutSet_(k,v){ if(st.scout) st.scout[k]=v; }
+function scoutOverlay_(){
+ const d=st.scout;
+ return `<div class="lotov" id="scoutOv"><div class="lotbox" style="text-align:left;max-width:460px;">
+  <h2 style="margin-top:0;">Log scouting finding</h2>
+  <label>Bed IDs (comma-separated)</label>
+  <input type="text" value="${esc(d.beds)}" oninput="scoutSet_('beds',this.value)" placeholder="e.g. B1-01, B1-02">
+  <label style="margin-top:10px;">Finding type</label>
+  <select onchange="scoutSet_('domain',this.value)">${SCOUT_DOMAINS_UI_.map(([v,l])=>`<option value="${v}" ${d.domain===v?'selected':''}>${esc(l)}</option>`).join('')}</select>
+  <label style="margin-top:10px;">Severity</label>
+  <select onchange="scoutSet_('severity',this.value)">${SCOUT_SEV_UI_.map(v=>`<option value="${v}" ${d.severity===v?'selected':''}>${v.charAt(0)+v.slice(1).toLowerCase()}</option>`).join('')}</select>
+  <label style="margin-top:10px;">What did you see?</label>
+  <input type="text" maxlength="200" value="${esc(d.symptom)}" oninput="scoutSet_('symptom',this.value)" placeholder="e.g. aphids on outer leaves">
+  <label style="margin-top:10px;">Notes (optional)</label>
+  <textarea rows="2" maxlength="500" oninput="scoutSet_('notes',this.value)">${esc(d.notes)}</textarea>
+  <label style="margin-top:10px;display:flex;gap:8px;align-items:center;"><input type="checkbox" ${d.requiresAction?'checked':''} onchange="scoutSet_('requiresAction',this.checked)"> Needs manager action</label>
+  ${d.err?`<div class="banner">${esc(d.err)}</div>`:''}
+  <div style="display:flex;gap:8px;margin-top:12px;"><button class="btn" style="flex:1;" ${d.busy?'disabled':''} onclick="scoutSubmit_()">${d.busy?'Saving…':'Save finding'}</button><button class="btn secondary" style="flex:1;" onclick="scoutClose_()">Cancel</button></div>
+ </div></div>`;
+}
+async function scoutSubmit_(){
+ const d=st.scout; if(!d||d.busy) return;
+ const beds=String(d.beds||'').trim();
+ if(!beds){ d.err='Enter at least one bed ID.'; render(); return; }
+ if(!String(d.symptom||'').trim()){ d.err='Describe what you saw.'; render(); return; }
+ d.busy=true; d.err=null; render();
+ const r=await api('submit-scout-finding',{bedIds:beds,domain:d.domain,severity:d.severity,symptom:d.symptom,notes:d.notes,requiresAction:!!d.requiresAction});
+ if(handleAuthError(r)){ if(st.scout) st.scout.busy=false; render(); return; }
+ if(r.ok){ const n=(r.data&&r.data.findingIds||[]).length; st.scout=null; st.scoutNote='Logged '+n+' finding'+(n===1?'':'s')+'.'; render(); return; }
+ if(st.scout){ st.scout.busy=false; st.scout.err=r.error||'Could not save the finding ('+(r.code||'error')+').'; }
+ render();
+}
 function render(){
  const el=document.getElementById('app');
  if(st.screen==='login')el.innerHTML=renderLogin();
@@ -1117,6 +1156,7 @@ function render(){
  else if(st.screen==='assignment')el.innerHTML=renderAssignment();
  else if(st.screen==='packhouse')el.innerHTML=renderPackhouse();
  if(st.lotSticker&&st.screen!=='login')el.insertAdjacentHTML('beforeend',stickerOverlay_());
+ if(st.scout&&st.screen!=='login')el.insertAdjacentHTML('beforeend',scoutOverlay_());
  if(st.screen==='packhouse'){phMount();if(PHW.label)el.insertAdjacentHTML('beforeend',phLabelOverlay());}
  if(tickTimer)clearInterval(tickTimer);
  if(st.screen==='home'&&st.sessions.some(s=>s.status==='active'))tickTimer=setInterval(updateTimers,1000);
