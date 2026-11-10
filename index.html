@@ -314,7 +314,7 @@ let tickTimer=null;
 let syncSeq=0;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
  sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,lotSticker:null,bedScan:null,bedScanRaw:'',intakeIn:'',scanBusy:false,
- pausingId:null,pauseReason:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{}};
+ pausingId:null,pauseReason:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{},presence:null,startScan:null,presScan:{raw:'',busy:false,msg:''}};
 const HOLD_MS=60000;   // how long a just-confirmed Start is trusted over a server answer that has not caught up
 
 const PAUSE_TYPES=['Break','Lunch','End of Day'];
@@ -409,26 +409,83 @@ async function attemptLogin(){
 }
 function doLogout(callServer){
  if(callServer!==false && st.token) api('logout',{device:(navigator.userAgent||'').slice(0,100)});
- try{sessionStorage.removeItem('vpos_session');localStorage.removeItem('vpos_session');}catch(e){}st.me=null;st.token=null;st.sessions=[];st.lotSticker=null;go('login');
+ try{sessionStorage.removeItem('vpos_session');localStorage.removeItem('vpos_session');}catch(e){}st.me=null;st.token=null;st.sessions=[];st.lotSticker=null;st.presence=null;st.startScan=null;go('login');
 }
 
 function startNewTask(){st.scanQuery='';st.selBed=null;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('scan');}
-async function processScan(){
- const raw=(st.scanQuery||'').trim(),q=raw.toUpperCase();
- if(!q){st.err='Scan or type a bed ID first.';render();return;}
- if(allBeds().includes(q)){selectBed(q);return;}
+/* ---- Physical presence: a task can only be started after the worker scans the QR code on the bed marker. ----
+   The server's scan-bed reply carries qrCode only when the code matches a registered bed QR (QR_REGISTRY). A typed bed ID
+   (or a plain-text camera read) comes back without it, so it can open a bed for viewing but never counts as presence. */
+const PRESENCE_MS=15*60000;   // a scan stays valid this long, and is used up by the Start it unlocks
+function presenceOk_(bedId){const p=st.presence;return !!p&&p.ok&&p.bedId===String(bedId||'').trim().toUpperCase()&&Date.now()-p.at<=PRESENCE_MS;}
+/** Resolves a scanned code on the server. Returns {ok,bedId,code,msg}; ok only for a registered bed QR that matches wantBed (when given). */
+async function verifyPresence_(raw,wantBed){
+ raw=String(raw||'').trim();
+ if(!raw)return{ok:false,msg:'Scan the QR code on the bed marker.'};
+ const r=await api('scan-bed',{code:raw});
+ if(handleAuthError(r))return{ok:false,auth:true};
+ if(!r.ok)return{ok:false,msg:r.error||'That bed code could not be checked.'};
+ const d=r.data||{},got=String(d.bedId||'').trim().toUpperCase();
+ if(!d.qrCode)return{ok:false,msg:'That is a bed ID, not a bed QR code. Scan the QR code on the bed marker.'};
+ if(wantBed&&got!==String(wantBed).trim().toUpperCase())return{ok:false,msg:'That code is for bed '+d.bedId+', but this task is on bed '+wantBed+'. Scan the right bed.'};
+ return{ok:true,bedId:got,code:raw,msg:'Bed '+d.bedId+' scanned.'};
+}
+async function verifyAssignPresence_(val){
+ const x=st.presScan,bed=st.selBed;if(!bed||x.busy)return;
+ const raw=String(val!==undefined?val:x.raw||'').trim();x.raw=raw;x.busy=true;x.msg='';render();
+ const v=await verifyPresence_(raw,bed);
+ x.busy=false;
+ if(v.auth)return;
+ if(v.ok){st.presence={bedId:v.bedId,code:v.code,at:Date.now(),ok:true};x.msg='';x.raw='';}else x.msg=v.msg;
+ render();
+}
+function presenceCardHtml_(){
+ const bed=st.selBed;
+ if(presenceOk_(bed))return `<div class="ok-note" style="margin:8px 0;">✓ On site: bed ${esc(bed)} QR scanned. You can start a task.</div>`;
+ const x=st.presScan;
+ return `<div class="card" style="margin-top:8px;"><div style="font-weight:700;">📍 Confirm you are at bed ${esc(bed)}</div>
+  <div class="sub" style="margin:4px 0 8px;">Scan the QR code on the bed marker. This is required before you can start a task. A typed bed ID does not count.</div>
+  <div class="row" style="margin-top:0"><input type="text" id="presIn" value="${esc(x.raw)}" autocapitalize="characters" autocomplete="off" placeholder="Scan the bed QR code" style="flex:3" oninput="st.presScan.raw=this.value" onkeydown="if(event.key==='Enter'){event.preventDefault();verifyAssignPresence_()}"><button class="btn secondary" type="button" style="flex:1" onclick="openCamera_('startpresence')">📷 Scan</button></div>
+  ${x.busy?'<div class="sub">Checking the bed code…</div>':(x.msg?`<div class="err">${esc(x.msg)}</div>`:'')}
+  <button class="btn block" style="margin-top:8px;" ${x.busy?'disabled':''} onclick="verifyAssignPresence_()">Verify bed</button></div>`;
+}
+/** Assigned (WAITING) task: Start opens a scan panel; a matching bed QR starts the session. */
+function openStartScan_(id){st.startScan={id:id,raw:'',busy:false,msg:''};st.err=null;render();}
+function cancelStartScan_(){st.startScan=null;render();}
+function startScanHtml_(s){
+ const x=st.startScan;
+ if(!x||x.id!==s.id)return `<div class="row"><button class="btn block" onclick="openStartScan_('${s.id}')">📷 Scan bed QR to Start</button></div>`;
+ return `<div class="sub" style="font-weight:700;margin:2px 0 6px;">Scan the QR code at bed ${esc(s.bedId)} to confirm you are there and start.</div>
+  <div class="row" style="margin-top:0"><input type="text" id="startScanIn" value="${esc(x.raw)}" autocapitalize="characters" autocomplete="off" placeholder="Scan the bed QR code" style="flex:3" oninput="st.startScan.raw=this.value" onkeydown="if(event.key==='Enter'){event.preventDefault();submitStartScan_('${s.id}')}"><button class="btn secondary" type="button" style="flex:1" onclick="openCamera_('starttask')">📷 Scan</button></div>
+  ${x.busy?'<div class="sub">Checking the bed code…</div>':(x.msg?`<div class="err">${esc(x.msg)}</div>`:'')}
+  <div class="row"><button class="btn secondary" ${x.busy?'disabled':''} onclick="cancelStartScan_()">Cancel</button><button class="btn" ${x.busy?'disabled':''} onclick="submitStartScan_('${s.id}')">Verify &amp; Start</button></div>`;
+}
+async function submitStartScan_(id,val){
+ const s=st.sessions.find(x=>x.id===id),x=st.startScan;if(!s||!x||x.busy)return;
+ const raw=String(val!==undefined?val:x.raw||'').trim();x.raw=raw;x.busy=true;x.msg='';render();
+ const v=await verifyPresence_(raw,s.bedId);
+ if(v.auth)return;
+ x.busy=false;
+ if(st.startScan!==x)return;   // cancelled while the server was answering
+ if(!v.ok){x.msg=v.msg;render();return;}
+ st.startScan=null;
+ await confirmStartAssigned(id,s.bedId,s.activityName,v.code);
+}
+async function processScan(viaCamera){
+ const raw=(st.scanQuery||'').trim();
+ if(!raw){st.err='Scan the bed QR code first.';render();return;}
  if(st.scanBusy)return;
- // Not a bed ID on this phone's list: it may be a QR value, which only the server can resolve (scan-bed).
  st.err=null;st.scanBusy=true;render();
  const r=await api('scan-bed',{code:raw});
  st.scanBusy=false;
  if(handleAuthError(r))return;
- const bed=r.ok&&r.data?String(r.data.bedId||'').toUpperCase():'';
- if(bed&&allBeds().includes(bed)){selectBed(bed);return;}
- st.err=r.ok?'Bed '+bed+' is not on this phone\'s bed list.':(r.error||'No bed found for "'+raw+'". Try Search Beds below.');
- render();
+ const d=r.ok&&r.data?r.data:null,bed=d?String(d.bedId||'').toUpperCase():'';
+ if(!bed||!allBeds().includes(bed)){st.err=r.ok?'Bed '+(d&&d.bedId||'')+' is not on this phone\'s bed list.':(r.error||'No bed found for "'+raw+'". Try Search Beds below.');render();return;}
+ if(d.qrCode){st.presence={bedId:bed,code:raw,at:Date.now(),ok:true};}   // a registered bed QR: presence established
+ else if(viaCamera){st.err='That code is not a registered bed QR code. Scan the QR code on the bed marker.';render();return;}
+ selectBed(bed);   // a typed bed ID still opens the bed to look at, but the scan is required to start
 }
-function selectBed(id){st.selBed=id;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('assignment');}
+function selectBed(id){st.presScan={raw:'',busy:false,msg:''};st.selBed=id;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('assignment');}
 function selectAct(id){st.selAct=actById(id);render();}
 
 /* ---- One tap = one action ---------------------------------------------------------------------
@@ -458,15 +515,17 @@ async function sessionIsClosed_(id){
 async function confirmStart(src){
  if(st.startingId||st.busy)return;
  if(!st.selBed)return;
+ if(!presenceOk_(st.selBed)){st.err='Scan the QR code at bed '+st.selBed+' before you start a task.';render();return;}
  if(!st.selAct){st.err='Choose a Field Action or an activity first.';st.showAllActs=true;render();return;}
  const bedId=st.selBed,act=st.selAct;
  st.startingId=(typeof src==='string'?src:'task');   // only the button that was pressed shows "Starting..."; the rest stay normal
  st.err=null;st.lastChange=Date.now();render();
- let r=await api('start-activity',{bedId:bedId,activityName:act.name});
+ let r=await api('start-activity',{bedId:bedId,activityName:act.name,scannedBed:(st.presence&&st.presence.code)||undefined});
  if(handleAuthError(r)){st.startingId=null;return;}
  if(isTransient_(r)){const live=await findLiveSession_(bedId,act.name);if(live)r={ok:true,data:{sessionId:live.Session_ID}};}   // it did start; only the reply was lost
  st.startingId=null;st.lastChange=Date.now();
  if(!r.ok){st.err=friendlyErr_(r,('Could not start that activity ('+(r.code||'error')+').'));render();return;}
+ st.presence=null;   // the scan is used up by this Start
  const arr=allSessions();
  if(!arr.some(x=>x.id===r.data.sessionId))arr.push({id:r.data.sessionId,workerId:st.me.workerId,bedId:bedId,block:bedBlock(bedId),
   activityId:act.id,activityName:act.name,qtyBased:act.qtyBased,unit:act.unit,isFertilizer:/fertiliz|fertigat/i.test(act.name||''),
@@ -493,10 +552,10 @@ async function quickStart(id){
  *  the server sync that surfaced it as 'assigned' in the first place; a
  *  fresh syncActiveSessions_() after the call picks up its new ACTIVE state
  *  and real Start_Time. */
-async function confirmStartAssigned(id,bedId,activityName){
+async function confirmStartAssigned(id,bedId,activityName,scannedBed){
  if(st.pending[id])return;
  st.pending[id]='starting';delete st.cardErr[id];st.err=null;st.lastChange=Date.now();render();   // only THIS card shows "Starting..."
- let r=await api('start-activity',{bedId,activityName});
+ let r=await api('start-activity',{bedId,activityName,scannedBed:scannedBed||undefined});
  if(handleAuthError(r)){delete st.pending[id];return;}
  if(isTransient_(r)&&await findLiveSession_(bedId,activityName))r={ok:true};   // it did start; only the reply was lost
  delete st.pending[id];st.lastChange=Date.now();
@@ -630,9 +689,12 @@ async function verifyBedScan_(raw,id){
 
 /* ---- Camera scanning (needs HTTPS and a browser with BarcodeDetector, e.g. Chrome on Android). Typing a code always still works. ---- */
 let camStream=null,camRaf=0,camTarget='';
+const BED_QR_TARGETS_=['bed','startbed','starttask','startpresence'];
 function camFail_(msg){
  if(camTarget==='recv'||camTarget==='trace'){PHW.msg=msg;phPaint();return;}
  if(camTarget==='startbed'){st.err=msg;render();return;}
+ if(camTarget==='starttask'){if(st.startScan)st.startScan.msg=msg;render();return;}
+ if(camTarget==='startpresence'){st.presScan.msg=msg;render();return;}
  if(st.completingId)st.cardErr[st.completingId]=msg;else st.err=msg;
  render();
 }
@@ -641,13 +703,13 @@ async function openCamera_(target){
  const dlg=document.getElementById('camDlg');
  if(!('BarcodeDetector' in window)||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!dlg||!dlg.showModal){camFail_('Camera scanning is not available on this phone or browser. Type the code or use a hand scanner.');return;}
  try{
-  let fm=(target==='bed'||target==='startbed')?['qr_code']:['code_39','qr_code'];
+  let fm=BED_QR_TARGETS_.includes(target)?['qr_code']:['code_39','qr_code'];
   if(BarcodeDetector.getSupportedFormats){const sup=await BarcodeDetector.getSupportedFormats();fm=fm.filter(f=>sup.includes(f));}
   if(!fm.length){camFail_('This browser cannot read that kind of code. Type it instead.');return;}
   const det=new BarcodeDetector({formats:fm});
   camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
   const v=document.getElementById('camVideo');v.srcObject=camStream;await v.play();
-  document.getElementById('camHint').textContent=(target==='bed'||target==='startbed')?'Point the camera at the bed QR code.':target==='trace'?'Point the camera at the case label.':'Point the camera at the lot sticker.';
+  document.getElementById('camHint').textContent=BED_QR_TARGETS_.includes(target)?'Point the camera at the bed QR code.':target==='trace'?'Point the camera at the case label.':'Point the camera at the lot sticker.';
   dlg.showModal();
   const tick=async()=>{
    if(!camStream)return;
@@ -667,7 +729,9 @@ function camDone_(t,val){
  else if(t==='lot'){st.intakeIn=val.toUpperCase();render();}
  else if(t==='recv'){PHW.scan=phNorm(val);phPaint();}
  else if(t==='trace')phTrace_(val);
- else if(t==='startbed'){st.scanQuery=val;processScan();}
+ else if(t==='startbed'){st.scanQuery=val;processScan(true);}
+ else if(t==='starttask'){if(st.startScan)submitStartScan_(st.startScan.id,val);}
+ else if(t==='startpresence')verifyAssignPresence_(val);
 }
 document.getElementById('camDlg').addEventListener('close',()=>{if(camStream)closeCamera_();});
 
@@ -844,9 +908,7 @@ function renderHome(){
     ${st.cardErr[s.id]?`<div class="banner">${esc(st.cardErr[s.id])}</div>`:''}
     ${justDone?`<div class="done-note">✓ Completed</div>`:assigned?(starting?`
       <div class="progress"><span class="spin"></span>Starting…</div>`:`
-      <div class="row">
-        <button class="btn block" onclick="confirmStartAssigned('${s.id}','${esc(s.bedId)}','${esc(s.activityName)}')">Start</button>
-      </div>`):completingNow?`
+      ${startScanHtml_(s)}`):completingNow?`
       <div class="progress"><span class="spin"></span>Completing…</div>`:completing?`
       <div class="sub" style="font-weight:700;margin:2px 0 6px;">Mark ${esc(s.activityName)} on ${esc(s.bedId)} as complete?</div>
       ${s.isFertilizer?(s.fert?'':`<div class="sub" style="margin:4px 0 6px;">The manager has not entered the fertilizer details for this task. You can still complete it; the manager will be notified.</div>`):(s.qtyBased?`<label>Quantity (${esc(s.unit)})</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:'')}
@@ -893,7 +955,7 @@ function onScanQueryInput(v){
 function renderScan(){
  return `${header()}
  <h1>Scan Location</h1>
- <p class="sub">Scan or Enter QR Code</p>
+ <p class="sub">Scan the bed QR code. A typed bed ID lets you look at a bed, but you must scan its QR code to start a task.</p>
  <input type="text" placeholder="e.g. B1-01" value="${esc(st.scanQuery)}"
    oninput="onScanQueryInput(this.value)" onkeydown="if(event.key==='Enter')processScan()">
  <div class="row"><button class="btn secondary" type="button" onclick="openCamera_('startbed')">📷 Scan with camera</button><button class="btn" onclick="processScan()">Process Scan</button></div>
@@ -917,7 +979,7 @@ function renderAssignment(){
  const worker=ACTIVITIES.filter(a=>a.workerExec);
  const quick=QUICK_ACTIONS.map(q=>{
   const a=actById(q.id);if(!a)return'';
-  return `<button class="qa-btn" ${st.startingId==='q:'+a.id?'disabled':''} onclick="quickStart('${a.id}')"><span class="qa-icon">${st.startingId==='q:'+a.id?'⏳':q.icon}</span><span>${st.startingId==='q:'+a.id?'Starting…':esc(q.label)}</span></button>`;
+  return `<button class="qa-btn" ${(st.startingId==='q:'+a.id||!presenceOk_(st.selBed))?'disabled':''} onclick="quickStart('${a.id}')"><span class="qa-icon">${st.startingId==='q:'+a.id?'⏳':q.icon}</span><span>${st.startingId==='q:'+a.id?'Starting…':esc(q.label)}</span></button>`;
  }).join('');
  return `${header()}
  <p class="link" onclick="go('scan')" style="margin-top:0;">‹ Cancel / Rescan</p>
@@ -932,12 +994,13 @@ function renderAssignment(){
  </div>
  ${errBanner()}
  ${st.scoutNote?`<div class="ok-note">${esc(st.scoutNote)}</div>`:''}
+ ${presenceCardHtml_()}
  <button class="btn secondary block" style="margin-top:8px;" onclick="scoutOpen_()">🔎 Log scouting finding</button>
  <h1 style="font-size:16px;margin-top:16px;">Field Actions</h1>
  <div class="qa-grid">${quick}</div>
  <p class="link" onclick="st.showAllActs=!st.showAllActs;render()">${st.showAllActs?'▾':'▸'} Or Choose Any Activity</p>
  ${st.showAllActs?worker.map(a=>`<button class="act-btn ${st.selAct&&st.selAct.id===a.id?'sel':''}" onclick="selectAct('${a.id}')">${esc(a.name)}</button>`).join(''):''}
- ${st.startingId==='task'?'<div class="progress"><span class="spin"></span>Starting…</div>':`<button class="btn block" style="margin-top:10px;" ${st.startingId?'disabled':''} onclick="confirmStart('task')">${st.selAct?'▶ Start '+esc(st.selAct.name):'▶ Start Task'}</button>`}
+ ${st.startingId==='task'?'<div class="progress"><span class="spin"></span>Starting…</div>':`<button class="btn block" style="margin-top:10px;" ${(st.startingId||!presenceOk_(st.selBed))?'disabled':''} onclick="confirmStart('task')">${st.selAct?'▶ Start '+esc(st.selAct.name):'▶ Start Task'}</button>`}
  <button class="btn secondary block" style="margin-top:8px;" onclick="go('scan')">Cancel / Rescan</button>
  <p class="link" onclick="go('home')">‹ Back to My Sessions</p>`;
 }
