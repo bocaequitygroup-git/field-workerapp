@@ -144,26 +144,13 @@ function handleAuthError(r){
  return false;
 }
 
-/* ================= Static reference data =================
-   Sourced directly from the live VPOS_System.xlsx (BED_MASTER, ACTIVITY_REFERENCE,
-   COHORT_PRODUCTION). No worker-facing read endpoint exists yet on the backend for
-   LIVE bed/cohort/status data, so BED_STATE_SNAPSHOT / COHORT_SNAPSHOT /
-   ACTIVITY_LOG_SNAPSHOT below are this workbook's last-known state, not a live feed
-   -- they need to be replaced by a real "get-bed-detail" / "get-bed-history" route
-   (or refreshed by hand) to stay accurate. BED_MASTER.Zone is not populated for any
-   bed in the current workbook, so Zone is omitted from the UI until that column has
-   real data. */
+/* ================= Reference data =================
+   Bed list, bed status, cohort, crop and stage are read LIVE from the server (list-beds, scan-bed, get-bed-history), see
+   loadBeds_(), loadBedLive_() and loadBedHist_(). BLOCKS below is only the stand-in layout used until list-beds answers.
+   The ACTIVITIES list is taken from ACTIVITY_REFERENCE (24 rows). */
 const BLOCKS=[['B1','Block 1',55],['B2','Block 2',55],['B3','Block 3',55],['B4','Block 4',55],['Z5','Zone 5',11]];
 
-// Bed_ID -> {status, cohortId} for any bed NOT at the BED_STATUS_RULES default (AVAILABLE, no cohort).
-// NOTE: 'ASSIGNED' is the raw Bed_Status value currently in BED_MASTER for B4-01, but it is not one of
-// the Valid_Bed_Status_Values on the BED_STATUS_RULES tab (AVAILABLE/RESERVED/PLANTED/GROWING/HARVEST
-// READY/HARVESTING/POST-HARVEST ACTIVITIES/BLOCKED) -- per R02 a confirmed-but-unplanted cohort should
-// read RESERVED. Shown as-is rather than silently relabeled; worth a data-integrity fix upstream.
-// Bed status, cohort, crop and stage are now read live from the server (scan-bed -> BED_MASTER + COHORT_PRODUCTION); see loadBedLive_().
 
-// Bed_ID -> [{activityName,workerId,endTime|startTime}], from FIELD_ACTIVITY_LOG. Currently empty workbook-wide.
-const ACTIVITY_LOG_SNAPSHOT={};
 
 // From ACTIVITY_REFERENCE (24 rows, incl. ACT_031 Irrigation). workerExec mirrors Is_Worker_Executable exactly --
 // only ACT_021 StateChange is manager-only and excluded from the worker picklist.
@@ -203,8 +190,17 @@ const QUICK_ACTIONS=[
  {id:'ACT_011',icon:'🌿',label:'Log Weeding'}
 ];
 
-function allBeds(){const out=[];for(const[p,,n]of BLOCKS){for(let i=1;i<=n;i++)out.push(p+'-'+String(i).padStart(2,'0'));}return out;}
-function bedBlock(id){const p=id.split('-')[0];const b=BLOCKS.find(x=>x[0]===p);return b?b[1]:'';}
+function genBeds_(){const out=[];for(const[p,,n]of BLOCKS){for(let i=1;i<=n;i++)out.push(p+'-'+String(i).padStart(2,'0'));}return out;}
+/** The beds that really exist (BED_MASTER, via list-beds). Until that answers, or if it cannot, the built-in layout stands in. */
+function allBeds(){return (st.beds&&st.beds.length)?st.beds.map(b=>b.id):genBeds_();}
+async function loadBeds_(){
+ if(!st.me)return;
+ const r=await api('list-beds',{});
+ if(handleAuthError(r))return;
+ if(r.ok&&r.data&&Array.isArray(r.data.beds)&&r.data.beds.length){st.beds=r.data.beds;}
+ const el=document.getElementById('bedSel');if(el&&st.screen==='scan')el.innerHTML=bedOptionsHtml_();
+}
+function bedBlock(id){const hb=(st.beds||[]).find(x=>x.id===id);if(hb&&hb.block)return hb.block;const p=id.split('-')[0];const b=BLOCKS.find(x=>x[0]===p);return b?b[1]:'';}
 function bedDetail(id){
  const L=st.bedLive[id]||{},d=L.data||null;
  return{bedId:id,block:bedBlock(id),zone:null,live:!!d,loading:!!L.loading,err:L.err||null,
@@ -325,7 +321,7 @@ let tickTimer=null;
 let syncSeq=0;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
  sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,lotSticker:null,bedScan:null,bedScanRaw:'',intakeIn:'',scanBusy:false,
- pausingId:null,pauseReason:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{},presence:null,startScan:null,presScan:{raw:'',busy:false,msg:''},bedLive:{}};
+ pausingId:null,pauseReason:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{},presence:null,startScan:null,presScan:{raw:'',busy:false,msg:''},bedLive:{},beds:null,bedFilter:'',bedHist:{}};
 const HOLD_MS=60000;   // how long a just-confirmed Start is trusted over a server answer that has not caught up
 
 const PAUSE_TYPES=['Break','Lunch','End of Day'];
@@ -400,7 +396,7 @@ async function syncActiveSessionsCore_(force){
  // while the DOM is replaced never fires) and dropped focus from the Notes/Quantity box.
  if(force||before!==sessSig_()||st.err)render();
 }
-if(st.me)syncActiveSessions_();
+if(st.me){syncActiveSessions_();loadBeds_();}
 
 function go(screen){st.screen=screen;st.err=null;render();}
 
@@ -416,14 +412,14 @@ async function attemptLogin(){
  st.token=r.data.token;
  try{sessionStorage.setItem('vpos_session',JSON.stringify({me:st.me,token:st.token}));}catch(e){}
  st.workerIdInput='';st.pinInput='';
- loadForMe();go('home');syncActiveSessions_();
+ loadForMe();go('home');syncActiveSessions_();loadBeds_();
 }
 function doLogout(callServer){
  if(callServer!==false && st.token) api('logout',{device:(navigator.userAgent||'').slice(0,100)});
- try{sessionStorage.removeItem('vpos_session');localStorage.removeItem('vpos_session');}catch(e){}st.me=null;st.token=null;st.sessions=[];st.lotSticker=null;st.presence=null;st.startScan=null;st.bedLive={};go('login');
+ try{sessionStorage.removeItem('vpos_session');localStorage.removeItem('vpos_session');}catch(e){}st.me=null;st.token=null;st.sessions=[];st.lotSticker=null;st.presence=null;st.startScan=null;st.bedLive={};st.bedHist={};go('login');
 }
 
-function startNewTask(){st.scanQuery='';st.selBed=null;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('scan');}
+function startNewTask(){st.bedFilter='';st.scanQuery='';st.selBed=null;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('scan');}
 /* ---- Physical presence: a task can only be started after the worker scans the QR code on the bed marker. ----
    The server's scan-bed reply carries qrCode only when the code matches a registered bed QR (QR_REGISTRY). A typed bed ID
    (or a plain-text camera read) comes back without it, so it can open a bed for viewing but never counts as presence. */
@@ -496,7 +492,7 @@ async function processScan(viaCamera){
  else if(viaCamera){st.err='That code is not a registered bed QR code. Scan the QR code on the bed marker.';render();return;}
  selectBed(bed);   // a typed bed ID still opens the bed to look at, but the scan is required to start
 }
-function selectBed(id){st.presScan={raw:'',busy:false,msg:''};st.selBed=id;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('assignment');loadBedLive_(id);}
+function selectBed(id){if(!allBeds().includes(id))return;st.presScan={raw:'',busy:false,msg:''};st.selBed=id;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('assignment');loadBedLive_(id);}
 function selectAct(id){st.selAct=actById(id);render();}
 
 /* ---- One tap = one action ---------------------------------------------------------------------
@@ -535,7 +531,7 @@ async function confirmStart(src){
  if(handleAuthError(r)){st.startingId=null;return;}
  if(isTransient_(r)){const live=await findLiveSession_(bedId,act.name);if(live)r={ok:true,data:{sessionId:live.Session_ID}};}   // it did start; only the reply was lost
  st.startingId=null;st.lastChange=Date.now();
- if(!r.ok){st.err=friendlyErr_(r,('Could not start that activity ('+(r.code||'error')+').'));render();return;}
+ if(!r.ok){if(/^BED_SCAN_/.test(r.code||''))st.presence=null;st.err=friendlyErr_(r,('Could not start that activity ('+(r.code||'error')+').'));render();return;}
  st.presence=null;   // the scan is used up by this Start
  const arr=allSessions();
  if(!arr.some(x=>x.id===r.data.sessionId))arr.push({id:r.data.sessionId,workerId:st.me.workerId,bedId:bedId,block:bedBlock(bedId),
@@ -950,39 +946,43 @@ function renderHome(){
  <button class="btn block" style="margin:14px 0;" onclick="startNewTask()">+ Start New Task</button>`;
 }
 
-function bedResultsHtml(){
- const q=(st.scanQuery||'').trim().toUpperCase();
- const results=q?allBeds().filter(b=>b.includes(q)).slice(0,30):[];
- return results.length?results.map(b=>{const d=bedDetail(b);
-   return `<div class="bed-row" onclick="selectBed('${b}')">
-   <div><div class="bed-id">${b}</div><div class="sub">${esc(d.block)}</div></div>
-   <div class="sub">›</div></div>`;}).join(''):`<p class="sub">${q?'No matching beds.':'Type a bed ID or block prefix (B1, B2, B3, B4, Z5) to search.'}</p>`;
+function bedOptionsHtml_(){
+ const q=(st.bedFilter||'').trim().toUpperCase();
+ const list=allBeds().filter(b=>!q||b.includes(q)).slice(0,400);
+ return list.length?list.map(b=>`<option value="${esc(b)}">${esc(b)} · ${esc(bedBlock(b))}</option>`).join(''):'<option value="" disabled>No matching bed</option>';
 }
-function onScanQueryInput(v){
- st.scanQuery=v;
- const el=document.getElementById('bedResults');
- if(el)el.innerHTML=bedResultsHtml();
-}
+function onBedFilter(v){st.bedFilter=v;const el=document.getElementById('bedSel');if(el)el.innerHTML=bedOptionsHtml_();}
 function renderScan(){
  return `${header()}
- <h1>Scan Location</h1>
- <p class="sub">Scan the bed QR code. A typed bed ID lets you look at a bed, but you must scan its QR code to start a task.</p>
- <input type="text" placeholder="e.g. B1-01" value="${esc(st.scanQuery)}"
-   oninput="onScanQueryInput(this.value)" onkeydown="if(event.key==='Enter')processScan()">
- <div class="row"><button class="btn secondary" type="button" onclick="openCamera_('startbed')">📷 Scan with camera</button><button class="btn" onclick="processScan()">Process Scan</button></div>
- ${st.scanBusy?'<p class="sub">Checking the code…</p>':''}
+ <h1>Select Bed</h1>
+ <p class="sub">Type to narrow the list, then pick the bed. Only beds in the list can be chosen. You scan its QR code on the next step to start a task.</p>
+ <input id="bedFilterBox" type="text" placeholder="Type a bed, e.g. B1-02" value="${esc(st.bedFilter)}" oninput="onBedFilter(this.value)" autocomplete="off" autocapitalize="characters">
+ <select id="bedSel" size="6" style="margin-top:8px;" onchange="selectBed(this.value)">${bedOptionsHtml_()}</select>
  ${errBanner()}
- <p class="sub" style="margin-top:18px;">Or Search Beds (no camera needed)</p>
- <input id="bedSearchBox" type="text" placeholder="Type a bed ID or block prefix (B1, B2, B3, B4, Z5)" value="${esc(st.scanQuery)}"
-   oninput="onScanQueryInput(this.value)" onkeydown="if(event.key==='Enter')processScan()">
- <div class="card" id="bedResults" style="margin-top:10px;">${bedResultsHtml()}</div>
+ <p class="sub" style="margin-top:18px;">Or scan the bed QR code now</p>
+ <div class="row" style="margin-top:0"><input type="text" placeholder="Scan or paste the bed QR code" value="${esc(st.scanQuery)}" oninput="st.scanQuery=this.value" onkeydown="if(event.key==='Enter')processScan()" style="flex:3"><button class="btn secondary" type="button" style="flex:1" onclick="openCamera_('startbed')">📷 Scan</button></div>
+ <button class="btn block" style="margin-top:8px;" ${st.scanBusy?'disabled':''} onclick="processScan()">${st.scanBusy?'Checking the code…':'Process Scan'}</button>
  <p class="link" onclick="go('home')">‹ Back to My Sessions</p>`;
 }
 
+/** Last finished tasks on a bed, from FIELD_ACTIVITY_LOG (get-bed-history). Cached 30 s per bed. */
+async function loadBedHist_(id){
+ const L=st.bedHist[id];
+ if(L&&(L.loading||(L.data&&Date.now()-L.at<30000)))return;
+ st.bedHist[id]={loading:true,data:(L&&L.data)||null,at:(L&&L.at)||0,err:null};
+ if(st.screen==='assignment'&&st.selBed===id)render();
+ const r=await api('get-bed-history',{bedId:id});
+ if(handleAuthError(r))return;
+ st.bedHist[id]=(r.ok&&Array.isArray(r.data))?{loading:false,data:r.data,at:Date.now(),err:null}:{loading:false,data:null,at:0,err:r.error||'Could not load the history.'};
+ if(st.screen==='assignment'&&st.selBed===id)render();
+}
 function bedHistoryHtml(bedId){
- const rows=ACTIVITY_LOG_SNAPSHOT[bedId]||[];
+ const L=st.bedHist[bedId]||{};
+ if(L.loading&&!L.data)return '<div class="hist">Loading…</div>';
+ if(L.err)return `<div class="hist"><span class="err">${esc(L.err)}</span> <span class="link" style="margin-top:0;" onclick="loadBedHist_('${esc(bedId)}')">Retry</span></div>`;
+ const rows=L.data||[];
  if(!rows.length)return '<div class="hist">No prior activity logged for this bed yet.</div>';
- return '<div class="hist">'+rows.map(r=>`<div class="hist-row">${esc(r.activityName)} — ${esc(r.workerId)} (${new Date(r.endTime||r.startTime).toLocaleDateString()})</div>`).join('')+'</div>';
+ return '<div class="hist">'+rows.map(r=>`<div class="hist-row">${esc(r.activityName)} — ${esc(r.workerId)} (${esc(new Date(r.endTime).toLocaleDateString())})</div>`).join('')+'</div>';
 }
 
 function renderAssignment(){
@@ -1002,7 +1002,7 @@ function renderAssignment(){
   ${d.stage?`<div class="detail-row">🪴 Stage: ${esc(d.stage)}${d.cohortStatus?' · '+esc(d.cohortStatus):''}</div>`:''}
   <div class="detail-row">📋 Field Status: ${esc(d.status)}</div>
   ${d.err?`<div class="err">Live bed data could not be loaded (${esc(d.err)}). <span class="link" style="margin-top:0;" onclick="loadBedLive_('${esc(d.bedId)}',true)">Retry</span></div>`:''}
-  <p class="link" style="margin-top:10px;margin-bottom:0;" onclick="st.showHistory=!st.showHistory;render()">${st.showHistory?'▾':'▸'} Bed History</p>
+  <p class="link" style="margin-top:10px;margin-bottom:0;" onclick="st.showHistory=!st.showHistory;render();if(st.showHistory)loadBedHist_(st.selBed)">${st.showHistory?'▾':'▸'} Bed History</p>
   ${st.showHistory?bedHistoryHtml(d.bedId):''}
  </div>
  ${errBanner()}
