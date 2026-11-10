@@ -160,8 +160,8 @@ const BLOCKS=[['B1','Block 1',55],['B2','Block 2',55],['B3','Block 3',55],['B4',
 // the Valid_Bed_Status_Values on the BED_STATUS_RULES tab (AVAILABLE/RESERVED/PLANTED/GROWING/HARVEST
 // READY/HARVESTING/POST-HARVEST ACTIVITIES/BLOCKED) -- per R02 a confirmed-but-unplanted cohort should
 // read RESERVED. Shown as-is rather than silently relabeled; worth a data-integrity fix upstream.
-const BED_STATE_SNAPSHOT={'B4-01':{status:'ASSIGNED',cohortId:'BET-C01'}};
-const COHORT_SNAPSHOT={'BET-C01':{cropId:'BET',cropName:'Beets'}};
+// Bed status, cohort, crop and stage are now read live from the server (scan-bed -> BED_MASTER + COHORT_PRODUCTION); see loadBedLive_().
+
 // Bed_ID -> [{activityName,workerId,endTime|startTime}], from FIELD_ACTIVITY_LOG. Currently empty workbook-wide.
 const ACTIVITY_LOG_SNAPSHOT={};
 
@@ -206,11 +206,22 @@ const QUICK_ACTIONS=[
 function allBeds(){const out=[];for(const[p,,n]of BLOCKS){for(let i=1;i<=n;i++)out.push(p+'-'+String(i).padStart(2,'0'));}return out;}
 function bedBlock(id){const p=id.split('-')[0];const b=BLOCKS.find(x=>x[0]===p);return b?b[1]:'';}
 function bedDetail(id){
- const snap=BED_STATE_SNAPSHOT[id]||{};
- const status=snap.status||'AVAILABLE';
- const cohortId=snap.cohortId||null;
- const cohort=cohortId?COHORT_SNAPSHOT[cohortId]:null;
- return{bedId:id,block:bedBlock(id),zone:null,status:status,cohortId:cohortId,cropName:cohort?cohort.cropName:null};
+ const L=st.bedLive[id]||{},d=L.data||null;
+ return{bedId:id,block:bedBlock(id),zone:null,live:!!d,loading:!!L.loading,err:L.err||null,
+  status:d?(d.bedStatus||'AVAILABLE'):(L.loading?'Loading…':'Unavailable'),
+  cohortId:(d&&d.cohortId)||null,cropName:(d&&d.cropName)||null,stage:(d&&d.currentStage)||'',cohortStatus:(d&&d.cohortStatus)||''};
+}
+/** Live bed context from the server: bed status (BED_MASTER) plus cohort, crop and stage (COHORT_PRODUCTION). Cached 30 s per bed.
+ *  Uses the worker's verified bed QR when there is one, so it also works if the server ever refuses typed bed IDs. */
+async function loadBedLive_(id,force){
+ const L=st.bedLive[id];
+ if(L&&(L.loading||(!force&&L.data&&Date.now()-L.at<30000)))return;
+ st.bedLive[id]={loading:true,data:(L&&L.data)||null,at:(L&&L.at)||0,err:null};
+ if(st.screen==='assignment'&&st.selBed===id)render();
+ const r=await api('scan-bed',{code:presenceOk_(id)?st.presence.code:id});
+ if(handleAuthError(r))return;
+ st.bedLive[id]=(r.ok&&r.data)?{loading:false,data:r.data,at:Date.now(),err:null}:{loading:false,data:null,at:0,err:r.error||'Could not load this bed.'};
+ if(st.screen==='assignment'&&st.selBed===id)render();
 }
 function fmt(ms){if(ms<0)ms=0;let s=Math.floor(ms/1000);const h=Math.floor(s/3600);s-=h*3600;const m=Math.floor(s/60);s-=m*60;
 return(h>0?String(h).padStart(2,'0')+':':'')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}
@@ -314,7 +325,7 @@ let tickTimer=null;
 let syncSeq=0;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
  sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,lotSticker:null,bedScan:null,bedScanRaw:'',intakeIn:'',scanBusy:false,
- pausingId:null,pauseReason:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{},presence:null,startScan:null,presScan:{raw:'',busy:false,msg:''}};
+ pausingId:null,pauseReason:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{},presence:null,startScan:null,presScan:{raw:'',busy:false,msg:''},bedLive:{}};
 const HOLD_MS=60000;   // how long a just-confirmed Start is trusted over a server answer that has not caught up
 
 const PAUSE_TYPES=['Break','Lunch','End of Day'];
@@ -409,7 +420,7 @@ async function attemptLogin(){
 }
 function doLogout(callServer){
  if(callServer!==false && st.token) api('logout',{device:(navigator.userAgent||'').slice(0,100)});
- try{sessionStorage.removeItem('vpos_session');localStorage.removeItem('vpos_session');}catch(e){}st.me=null;st.token=null;st.sessions=[];st.lotSticker=null;st.presence=null;st.startScan=null;go('login');
+ try{sessionStorage.removeItem('vpos_session');localStorage.removeItem('vpos_session');}catch(e){}st.me=null;st.token=null;st.sessions=[];st.lotSticker=null;st.presence=null;st.startScan=null;st.bedLive={};go('login');
 }
 
 function startNewTask(){st.scanQuery='';st.selBed=null;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('scan');}
@@ -436,7 +447,7 @@ async function verifyAssignPresence_(val){
  const v=await verifyPresence_(raw,bed);
  x.busy=false;
  if(v.auth)return;
- if(v.ok){st.presence={bedId:v.bedId,code:v.code,at:Date.now(),ok:true};x.msg='';x.raw='';}else x.msg=v.msg;
+ if(v.ok){st.presence={bedId:v.bedId,code:v.code,at:Date.now(),ok:true};x.msg='';x.raw='';loadBedLive_(bed,true);}else x.msg=v.msg;
  render();
 }
 function presenceCardHtml_(){
@@ -485,7 +496,7 @@ async function processScan(viaCamera){
  else if(viaCamera){st.err='That code is not a registered bed QR code. Scan the QR code on the bed marker.';render();return;}
  selectBed(bed);   // a typed bed ID still opens the bed to look at, but the scan is required to start
 }
-function selectBed(id){st.presScan={raw:'',busy:false,msg:''};st.selBed=id;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('assignment');}
+function selectBed(id){st.presScan={raw:'',busy:false,msg:''};st.selBed=id;st.selAct=null;st.showAllActs=false;st.showHistory=false;go('assignment');loadBedLive_(id);}
 function selectAct(id){st.selAct=actById(id);render();}
 
 /* ---- One tap = one action ---------------------------------------------------------------------
@@ -944,7 +955,7 @@ function bedResultsHtml(){
  const results=q?allBeds().filter(b=>b.includes(q)).slice(0,30):[];
  return results.length?results.map(b=>{const d=bedDetail(b);
    return `<div class="bed-row" onclick="selectBed('${b}')">
-   <div><div class="bed-id">${b}</div><div class="sub">${esc(d.block)} · ${esc(d.cropName?('Growing '+d.cropName):d.status)}</div></div>
+   <div><div class="bed-id">${b}</div><div class="sub">${esc(d.block)}</div></div>
    <div class="sub">›</div></div>`;}).join(''):`<p class="sub">${q?'No matching beds.':'Type a bed ID or block prefix (B1, B2, B3, B4, Z5) to search.'}</p>`;
 }
 function onScanQueryInput(v){
@@ -986,9 +997,11 @@ function renderAssignment(){
  <h1>Confirm Assignment</h1>
  <div class="card">
   <div style="font-weight:700;font-size:16px;">📍 Bed ${esc(d.bedId)} <span class="sub" style="font-weight:400;">(Block ${esc(d.block)}${d.zone?' · Zone '+esc(d.zone):''})</span></div>
-  <div class="detail-row">🌱 Crop: ${d.cropName?esc(d.cropName):'—'}</div>
+  <div class="detail-row">🌱 Crop: ${d.cropName?esc(d.cropName):(d.live?'No crop assigned':'—')}</div>
   <div class="detail-row">🏷️ Cohort: ${d.cohortId?esc(d.cohortId):'—'}</div>
+  ${d.stage?`<div class="detail-row">🪴 Stage: ${esc(d.stage)}${d.cohortStatus?' · '+esc(d.cohortStatus):''}</div>`:''}
   <div class="detail-row">📋 Field Status: ${esc(d.status)}</div>
+  ${d.err?`<div class="err">Live bed data could not be loaded (${esc(d.err)}). <span class="link" style="margin-top:0;" onclick="loadBedLive_('${esc(d.bedId)}',true)">Retry</span></div>`:''}
   <p class="link" style="margin-top:10px;margin-bottom:0;" onclick="st.showHistory=!st.showHistory;render()">${st.showHistory?'▾':'▸'} Bed History</p>
   ${st.showHistory?bedHistoryHtml(d.bedId):''}
  </div>
