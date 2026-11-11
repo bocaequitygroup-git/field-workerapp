@@ -433,7 +433,6 @@ async function verifyPresence_(raw,wantBed){
  if(handleAuthError(r))return{ok:false,auth:true};
  if(!r.ok)return{ok:false,msg:r.error||'That bed code could not be checked.'};
  const d=r.data||{},got=String(d.bedId||'').trim().toUpperCase();
- if(!d.qrCode)return{ok:false,msg:'That is a bed ID, not a bed QR code. Scan the QR code on the bed marker.'};
  if(wantBed&&got!==String(wantBed).trim().toUpperCase())return{ok:false,msg:'That code is for bed '+d.bedId+', but this task is on bed '+wantBed+'. Scan the right bed.'};
  return{ok:true,bedId:got,code:raw,msg:'Bed '+d.bedId+' scanned.'};
 }
@@ -467,19 +466,23 @@ function cancelStartScan_(){st.startScan=null;render();}
 function startScanHtml_(s){
  const x=st.startScan;
  if(!x||x.id!==s.id)return `<div class="row"><button class="btn block" onclick="openStartScan_('${s.id}')">📷 Scan bed QR to Start</button></div>`;
- return `<div class="sub" style="font-weight:700;margin:2px 0 6px;">Select bed ${esc(s.bedId)}, then scan its QR code to start.</div>
+ return `<div class="sub" style="font-weight:700;margin:2px 0 6px;">Select bed ${esc(s.bedId)}, or scan / type its code, then tap Verify &amp; Start.</div>
   <label>1. Select the bed</label>
   <select id="startBedSel" onchange="onStartBedPick(this.value)">${startBedOptions_(x,s)}</select>
   ${x.pick?`<div class="ok-note">✓ Bed ${esc(x.pick)} selected.</div>`:''}
-  <label style="margin-top:8px;">2. Scan the bed QR code</label>
-  <div class="row" style="margin-top:0"><input type="text" id="startScanIn" value="${esc(x.raw)}" autocapitalize="characters" autocomplete="off" placeholder="Scan the bed QR code" style="flex:3" oninput="st.startScan.raw=this.value" onkeydown="if(event.key==='Enter'){event.preventDefault();submitStartScan_('${s.id}')}"><button class="btn secondary" type="button" style="flex:1" onclick="openCamera_('starttask')">📷 Scan</button></div>
+  <label style="margin-top:8px;">2. Or scan the QR / type the bed ID</label>
+  <div class="row" style="margin-top:0"><input type="text" id="startScanIn" value="${esc(x.raw)}" autocapitalize="characters" autocomplete="off" placeholder="Scan QR or type bed ID (optional)" style="flex:3" oninput="st.startScan.raw=this.value" onkeydown="if(event.key==='Enter'){event.preventDefault();submitStartScan_('${s.id}')}"><button class="btn secondary" type="button" style="flex:1" onclick="openCamera_('starttask')">📷 Scan</button></div>
   ${x.busy?'<div class="sub">Checking the bed code…</div>':(x.msg?`<div class="err">${esc(x.msg)}</div>`:'')}
   <div class="row"><button class="btn secondary" ${x.busy?'disabled':''} onclick="cancelStartScan_()">Cancel</button><button class="btn" ${x.busy?'disabled':''} onclick="submitStartScan_('${s.id}')">Verify &amp; Start</button></div>`;
 }
 async function submitStartScan_(id,val){
  const s=st.sessions.find(x=>x.id===id),x=st.startScan;if(!s||!x||x.busy)return;
- if(String(x.pick||'').toUpperCase()!==String(s.bedId).toUpperCase()){x.raw=String(val!==undefined?val:x.raw||'').trim();x.msg='Select bed '+s.bedId+' first, then scan its QR code.';render();return;}
- const raw=String(val!==undefined?val:x.raw||'').trim();x.raw=raw;x.busy=true;x.msg='';render();
+ const raw=String(val!==undefined?val:x.raw||'').trim();x.raw=raw;
+ const picked=String(x.pick||'').toUpperCase()===String(s.bedId).toUpperCase();
+ // Any one of three is enough: the bed picked from the list, a scanned QR, or a typed bed ID / QR code.
+ if(!raw&&!picked){x.msg='Select bed '+s.bedId+', or scan / type its code, to start.';render();return;}
+ if(!raw){st.startScan=null;await confirmStartAssigned(id,s.bedId,s.activityName,'');return;}   // bed selected, nothing scanned or typed
+ x.busy=true;x.msg='';render();
  const v=await verifyPresence_(raw,s.bedId);
  if(v.auth)return;
  x.busy=false;
