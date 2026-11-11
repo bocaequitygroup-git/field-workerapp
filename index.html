@@ -457,18 +457,31 @@ function presenceCardHtml_(){
   <button class="btn block" style="margin-top:8px;" ${x.busy?'disabled':''} onclick="verifyAssignPresence_()">Verify bed</button></div>`;
 }
 /** Assigned (WAITING) task: Start opens a scan panel; a matching bed QR starts the session. */
-function openStartScan_(id){st.startScan={id:id,raw:'',busy:false,msg:''};st.err=null;render();}
+function openStartScan_(id){st.startScan={id:id,raw:'',busy:false,msg:'',pick:'',filter:''};st.err=null;render();}
+function startBedOptions_(x){
+ const q=(x.filter||'').trim().toUpperCase();
+ const list=allBeds().filter(b=>!q||b.includes(q)).slice(0,400);
+ return list.length?list.map(b=>`<option value="${esc(b)}" ${x.pick===b?'selected':''}>${esc(b)} · ${esc(bedBlock(b))}</option>`).join(''):'<option value="" disabled>No matching bed</option>';
+}
+function onStartBedFilter(v){const x=st.startScan;if(!x)return;x.filter=v;const el=document.getElementById('startBedSel');if(el)el.innerHTML=startBedOptions_(x);}
+function onStartBedPick(v){const x=st.startScan;if(!x||!v)return;x.pick=String(v).toUpperCase();x.msg='';render();}
 function cancelStartScan_(){st.startScan=null;render();}
 function startScanHtml_(s){
  const x=st.startScan;
  if(!x||x.id!==s.id)return `<div class="row"><button class="btn block" onclick="openStartScan_('${s.id}')">📷 Scan bed QR to Start</button></div>`;
- return `<div class="sub" style="font-weight:700;margin:2px 0 6px;">Scan the QR code at bed ${esc(s.bedId)} to confirm you are there and start.</div>
+ return `<div class="sub" style="font-weight:700;margin:2px 0 6px;">Select bed ${esc(s.bedId)} from the list, then scan its QR code to start.</div>
+  <label>1. Select the bed</label>
+  <input type="text" id="startBedFilter" placeholder="Type a bed, e.g. ${esc(s.bedId)}" value="${esc(x.filter)}" oninput="onStartBedFilter(this.value)" autocomplete="off" autocapitalize="characters">
+  <select id="startBedSel" size="4" style="margin-top:6px;" onchange="onStartBedPick(this.value)">${startBedOptions_(x)}</select>
+  ${x.pick?`<div class="${x.pick===String(s.bedId).toUpperCase()?'ok-note':'err'}">${x.pick===String(s.bedId).toUpperCase()?'✓ Bed '+esc(x.pick)+' selected.':'This task is on bed '+esc(s.bedId)+', not '+esc(x.pick)+'. Select bed '+esc(s.bedId)+'.'}</div>`:''}
+  <label style="margin-top:8px;">2. Scan the bed QR code</label>
   <div class="row" style="margin-top:0"><input type="text" id="startScanIn" value="${esc(x.raw)}" autocapitalize="characters" autocomplete="off" placeholder="Scan the bed QR code" style="flex:3" oninput="st.startScan.raw=this.value" onkeydown="if(event.key==='Enter'){event.preventDefault();submitStartScan_('${s.id}')}"><button class="btn secondary" type="button" style="flex:1" onclick="openCamera_('starttask')">📷 Scan</button></div>
   ${x.busy?'<div class="sub">Checking the bed code…</div>':(x.msg?`<div class="err">${esc(x.msg)}</div>`:'')}
   <div class="row"><button class="btn secondary" ${x.busy?'disabled':''} onclick="cancelStartScan_()">Cancel</button><button class="btn" ${x.busy?'disabled':''} onclick="submitStartScan_('${s.id}')">Verify &amp; Start</button></div>`;
 }
 async function submitStartScan_(id,val){
  const s=st.sessions.find(x=>x.id===id),x=st.startScan;if(!s||!x||x.busy)return;
+ if(String(x.pick||'').toUpperCase()!==String(s.bedId).toUpperCase()){x.raw=String(val!==undefined?val:x.raw||'').trim();x.msg='Select bed '+s.bedId+' from the list first, then scan its QR code.';render();return;}
  const raw=String(val!==undefined?val:x.raw||'').trim();x.raw=raw;x.busy=true;x.msg='';render();
  const v=await verifyPresence_(raw,s.bedId);
  if(v.auth)return;
