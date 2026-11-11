@@ -364,6 +364,8 @@ async function syncActiveSessionsCore_(force){
  // What the SERVER says is still open for this worker. This is the truth: a task the server lists as open is never shown as completed.
  const liveRows=(r.data||[]).filter(x=>!CLOSED_.test(String(x.Status||'').trim().toUpperCase())&&!String(x.End_Time||'').trim());
  const liveIds={};liveRows.forEach(x=>{liveIds[x.Session_ID]=1;});
+ // A "server is slow, tap again" banner left by a Start whose reply was lost is stale once the server lists that session as running.
+ if(st.startUnsure)liveRows.forEach(x=>{if(st.startUnsure[x.Session_ID]&&/^(ACTIVE|PAUSED)$/i.test(String(x.Status||'').trim())){delete st.cardErr[x.Session_ID];delete st.startUnsure[x.Session_ID];}});
  const GRACE_MS=3*60000;   // a server answer this soon after a Complete tap may not have caught up yet
  let localOnly=allSessions().filter(s=>s.workerId===st.me.workerId&&s.status==='completed');
  const staleDone=localOnly.filter(x=>liveIds[x.id]&&Date.now()-(x.endTime||0)>GRACE_MS);   // phone says done, server says open, and it is not a race: the phone is wrong
@@ -577,9 +579,15 @@ async function confirmStartAssigned(id,bedId,activityName,scannedBed){
  st.pending[id]='starting';delete st.cardErr[id];st.err=null;st.lastChange=Date.now();render();   // only THIS card shows "Starting..."
  let r=await api('start-activity',{bedId,activityName,scannedBed:scannedBed||undefined});
  if(handleAuthError(r)){delete st.pending[id];return;}
- if(isTransient_(r)&&await findLiveSession_(bedId,activityName))r={ok:true};   // it did start; only the reply was lost
+ if(isTransient_(r)){   // the reply was lost, but the server may have started it: look a few times (slow Apps Script) before reporting a failure
+  for(const wait of [0,2500,6000]){
+   if(wait)await sleep_(wait);
+   const live=await findLiveSession_(bedId,activityName);
+   if(live){r={ok:true};break;}
+  }
+ }
  delete st.pending[id];st.lastChange=Date.now();
- if(!r.ok){st.cardErr[id]=friendlyErr_(r,('Could not start that activity ('+(r.code||'error')+'). Tap Start to try again.'));render();return;}
+ if(!r.ok){if(isTransient_(r)){st.startUnsure=st.startUnsure||{};st.startUnsure[id]=1;}st.cardErr[id]=friendlyErr_(r,('Could not start that activity ('+(r.code||'error')+'). Tap Start to try again.'));render();return;}
  const cur=st.sessions.find(x=>x.id===id);   // running right away; the sync below brings the real Start_Time
  if(cur){
   cur.status='active';cur.startTime=Date.now();cur.totalPausedMs=0;cur.pausedAt=null;
