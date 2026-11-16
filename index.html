@@ -447,6 +447,13 @@ async function verifyAssignPresence_(val){
  if(v.ok){st.presence={bedId:v.bedId,code:v.code,at:Date.now(),ok:true};x.msg='';x.raw='';loadBedLive_(bed,true);}else x.msg=v.msg;
  render();
 }
+/* Standard labor per 300-ft bed for the ACT_060-062 prep steps (display only; descriptions come from ACTIVITY_REFERENCE). */
+function dsPrepPace_(k){ return ({
+  ACT_060:{min:20,range:'15–25',note:'Est. 15–25 min per 300-ft bed, including hitching and transit.'},
+  ACT_061:{min:12,range:'10–15',note:'Est. 10–15 min per 300-ft bed.'},
+  ACT_062:{min:4,range:'3–5',note:'Est. 3–5 min manual check; add 30–60 min passive irrigation if dry.'}
+})[k]||null; }
+function dsPrepLine_(s){ const p=dsPrepPace_(String(s.activityId||'').trim().toUpperCase()); return p?`<div class="sub"><b>Target pace:</b> ~${p.min} min/bed (${p.range} min). ${esc(p.note)}</div>`:''; }
 function presenceCardHtml_(){
  const bed=st.selBed;
  if(presenceOk_(bed))return `<div class="ok-note" style="margin:8px 0;">✓ On site: bed ${esc(bed)} QR scanned. You can start a task.</div>`;
@@ -930,6 +937,7 @@ function renderHome(){
       <div style="font-weight:700;margin-top:6px;">${esc(s.bedId)} · ${esc(s.block)}</div>
       <div class="sub">${esc(actLine_(s))}</div>
       ${s.description?`<div class="sub">${esc(s.description)}</div>`:''}
+      ${dsPrepLine_(s)}
       ${fertLine_(s)}
       ${s.reassignedFromName?`<div class="sub re">↩ Reassigned from ${esc(s.reassignedFromName)}${s.managerName?' by '+esc(s.managerName):''}</div>`
         :s.managerName?`<div class="sub by">Assigned by ${esc(s.managerName)}</div>`:''}
