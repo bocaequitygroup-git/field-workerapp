@@ -80,6 +80,9 @@ select{width:100%;padding:12px;border-radius:var(--radius);border:1.5px solid va
 .logsum b{color:var(--text);}
 .dayhead{display:flex;justify-content:space-between;font-size:13px;font-weight:700;color:var(--sub);margin:14px 2px 6px;}
 .logrow{display:flex;justify-content:space-between;align-items:center;gap:10px;}
+.rv{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;margin-right:4px;background:#e6e6e6;color:#444;}
+.rv.ver{background:var(--accent-d);color:#fff;}.rv.chk{background:#d9e8f7;color:#1d4e7a;}.rv.rea{background:#fff0d6;color:#8a5a00;}
+.lognote{margin-top:6px;padding:6px 8px;border-radius:8px;background:#f5f5f2;font-size:13px;white-space:pre-wrap;}
 .logdur{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;}
 /* Intake lot sticker (shown after a Harvest is logged). The label is always black on white so it prints and scans in either theme. */
 .lotov{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;}
@@ -248,9 +251,11 @@ function mapServerDone_(r){
  const paused=Math.max(0,(end-s0)-Math.round((Number(r.elapsedMinutes)||0)*60000));
  return {id:r.id||r.logId, workerId:st.me.workerId, bedId:r.bedId, block:bedBlock(r.bedId), activityId:r.activityId||a.id||'',
   activityName:r.activityName||'', qtyBased:!!a.qtyBased, unit:r.unit||a.unit||'', status:'completed',
-  startTime:s0, endTime:end, totalPausedMs:paused, pausedAt:null};
+  startTime:s0, endTime:end, totalPausedMs:paused, pausedAt:null,
+  notes:r.notes||'', reviewStatus:r.reviewStatus||'COMPLETED', verifiedBy:r.verifiedBy||'', verifiedDate:r.verifiedDate||'',
+  checkedBy:r.checkedBy||'', checkedDate:r.checkedDate||'', reassignments:Array.isArray(r.reassignments)?r.reassignments:[]};
 }
-function sessSig_(){return JSON.stringify(st.sessions.map(s=>[s.id,s.status,s.pauseType,s.activityId,s.activityName,s.bedId,s.assignedTime,s.managerName,s.reassignedFromName,s.description,Math.round((s.totalPausedMs||0)/1000)]));}
+function sessSig_(){return JSON.stringify(st.sessions.map(s=>[s.id,s.status,s.pauseType,s.activityId,s.activityName,s.bedId,s.assignedTime,s.managerName,s.reassignedFromName,s.description,s.reviewStatus,s.notes,(s.reassignments||[]).length,Math.round((s.totalPausedMs||0)/1000)]));}
 function allSessions(){try{return JSON.parse(localStorage.getItem('vpos_sessions')||'[]');}catch(e){return[];}}
 function saveSessions(arr){localStorage.setItem('vpos_sessions',JSON.stringify(arr));}
 function actByName(name){return ACTIVITIES.find(a=>a.name===name);}
@@ -321,10 +326,18 @@ let tickTimer=null;
 let syncSeq=0;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
  sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,lotSticker:null,bedScan:null,bedScanRaw:'',intakeIn:'',scanBusy:false,
- pausingId:null,pauseReason:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{},presence:null,startScan:null,presScan:{raw:'',busy:false,msg:''},bedLive:{},beds:null,bedFilter:'',bedHist:{}};
+ pausingId:null,pauseReason:'',pauseCustom:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{},presence:null,startScan:null,presScan:{raw:'',busy:false,msg:''},bedLive:{},beds:null,bedFilter:'',bedHist:{}};
 const HOLD_MS=60000;   // how long a just-confirmed Start is trusted over a server answer that has not caught up
 
-const PAUSE_TYPES=['Break','Lunch','End of Day'];
+const PAUSE_TYPES=['Break','Lunch','End of Day','Others'];
+/* The reason that is saved. 'Others' needs typed text and is stored as 'Others: <text>'. Pause reasons are kept as a comma list
+   (parallel to the pause times), so commas are swapped for semicolons and the text is capped, or the list would shift out of step. */
+function pauseReasonFinal_(){
+ if(st.pauseReason!=='Others')return st.pauseReason;
+ const t=String(st.pauseCustom||'').replace(/[,\r\n]+/g,'; ').replace(/\s+/g,' ').trim().slice(0,80);
+ return t?'Others: '+t:'';
+}
+function onPauseCustom(v){st.pauseCustom=v;const b=document.getElementById('pauseOk');if(b)b.disabled=!!st.busy||!pauseReasonFinal_();}
 
 /* Login is kept per TAB (sessionStorage), not per browser (localStorage): a new tab or window now opens on the
    login screen, and two tabs can be signed in as different workers without overwriting each other. A refresh in the
@@ -624,18 +637,19 @@ function localUpdate(id,patch){
 }
 /** Opens the pause-type picker for a session (Pause button no longer pauses immediately -
  *  a pause type (Break/Lunch/End of Day) must be selected and logged, per spec). */
-function openPause(id){st.pausingId=id;st.pauseReason='';st.err=null;render();}
+function openPause(id){st.pausingId=id;st.pauseReason='';st.pauseCustom='';st.err=null;render();}
 function cancelPause(){st.pausingId=null;render();}
 async function confirmPause(id){
- if(st.busy||!st.pauseReason)return;
+ const reason=pauseReasonFinal_();
+ if(st.busy||!reason)return;
  st.busy=true;st.err=null;render();
- let r=await api('pause-activity',{sessionId:id,reason:st.pauseReason});
+ let r=await api('pause-activity',{sessionId:id,reason:reason});
  if(isTransient_(r)){const rows=await mySessionRows_();const row=rows&&rows.find(x=>x.Session_ID===id);if(row&&String(row.Status||'').toUpperCase()==='PAUSED')r={ok:true};}   // it paused; only the reply was lost
  st.busy=false;
  if(handleAuthError(r))return;
  if(!r.ok){st.err=friendlyErr_(r,('Could not pause that task ('+(r.code||'error')+').'));render();return;}
  st.pausingId=null;
- localUpdate(id,{status:'paused',pausedAt:Date.now(),pauseType:st.pauseReason});render();
+ localUpdate(id,{status:'paused',pausedAt:Date.now(),pauseType:reason});render();
 }
 async function resumeS(id){
  if(st.busy)return;
@@ -858,6 +872,17 @@ function filteredLog_(){
    &&(!q||String(s.bedId).toUpperCase().includes(q)))
   .sort((a,b)=>endOf_(b)-endOf_(a));
 }
+function dtOf_(iso){if(!iso)return '';const d=new Date(iso);return isNaN(d.getTime())?'':d.toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});}
+function reviewHtml_(s){
+ if(!s.reviewStatus&&!s.notes&&!(s.reassignments||[]).length)return '';
+ let out='';
+ if(s.reviewStatus==='VERIFIED')out+=`<div class="sub"><span class="rv ver">Verified</span>by ${esc(s.verifiedBy||'a manager')}${s.verifiedDate?' · '+esc(dtOf_(s.verifiedDate)):''}</div>`;
+ else if(s.reviewStatus==='CHECKED')out+=`<div class="sub"><span class="rv chk">Checked</span>by ${esc(s.checkedBy||'a manager')}${s.checkedDate?' · '+esc(dtOf_(s.checkedDate)):''} · awaiting verification</div>`;
+ else if(s.reviewStatus==='COMPLETED')out+=`<div class="sub"><span class="rv">Not yet reviewed</span></div>`;
+ (s.reassignments||[]).forEach(x=>{out+=`<div class="sub"><span class="rv rea">${/close/i.test(x.mode)?'Closed & new':'Reassigned'}</span>${esc(x.fromName||'unassigned')} → ${esc(x.toName)} by ${esc(x.byName)}${x.at?' · '+esc(dtOf_(x.at)):''}${x.note?' — '+esc(x.note):''}</div>`;});
+ if(s.notes)out+=`<div class="lognote"><b>Notes:</b> ${esc(s.notes)}</div>`;
+ return out;
+}
 function logListHtml_(){
  const rows=filteredLog_();
  if(!rows.length)return `<p class="sub" style="margin-top:14px;">${doneRows_().length?'No completed tasks match these filters.':(st.doneErr?'No completed tasks on this device. Your server history could not be loaded.':'No completed tasks yet.')}</p>`;
@@ -871,7 +896,7 @@ function logListHtml_(){
   out+=g.map(s=>`<div class="card"><div class="logrow"><div>
     <div style="font-weight:700;">${esc(s.bedId)} · ${esc(s.block)}</div>
     <div class="sub">${esc(actLine_(s))}</div>
-    <div class="sub">${esc(timeOf_(s.startTime))} – ${esc(timeOf_(s.endTime))}</div></div>
+    <div class="sub">${esc(timeOf_(s.startTime))} – ${esc(timeOf_(s.endTime))}</div>${reviewHtml_(s)}</div>
     <div class="logdur">${fmt(elapsed(s))}</div></div></div>`).join('');
  });
  return out;
@@ -963,9 +988,10 @@ function renderHome(){
       <div class="row" style="flex-wrap:wrap;gap:6px;">
         ${PAUSE_TYPES.map(t=>`<button class="btn secondary" style="flex:none;${st.pauseReason===t?'font-weight:700;text-decoration:underline;':''}" onclick="st.pauseReason='${t}';render()">${esc(t)}</button>`).join('')}
       </div>
+      ${st.pauseReason==='Others'?`<input class="full" type="text" maxlength="80" placeholder="Type your reason" value="${esc(st.pauseCustom)}" oninput="onPauseCustom(this.value)" style="margin-top:8px;">`:''}
       <div class="row" style="margin-top:8px;">
         <button class="btn secondary" ${st.busy?'disabled':''} onclick="cancelPause()">Cancel</button>
-        <button class="btn secondary" ${st.busy||!st.pauseReason?'disabled':''} onclick="confirmPause('${s.id}')">${st.busy?'Pausing…':'Confirm Pause'}</button>
+        <button class="btn secondary" id="pauseOk" ${st.busy||!pauseReasonFinal_()?'disabled':''} onclick="confirmPause('${s.id}')">${st.busy?'Pausing…':'Confirm Pause'}</button>
       </div>`:`
       ${st.flash[s.id]==='started'&&s.status==='active'?'<div class="ok-note">✓ Started - timer running</div>':''}
       <div class="row">
