@@ -80,15 +80,9 @@ select{width:100%;padding:12px;border-radius:var(--radius);border:1.5px solid va
 .logsum b{color:var(--text);}
 .dayhead{display:flex;justify-content:space-between;font-size:13px;font-weight:700;color:var(--sub);margin:14px 2px 6px;}
 .logrow{display:flex;justify-content:space-between;align-items:center;gap:10px;}
-.rv{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:20px;margin-right:6px;background:#e6e6e6;color:#444;}
-.rv.ver{background:#d7f0de;color:#146c31;}.rv.chk{background:#d9e8f7;color:#16508f;}.rv.pen{background:#ffe6d3;color:#b04a14;}.rv.rea{background:#ecdff5;color:#6b2f8f;}.rv.nt{background:#fff0c2;color:#7a5200;}
-.t-ver{color:#146c31;font-weight:700;}.t-chk{color:#16508f;font-weight:700;}.t-pen{color:#b04a14;font-weight:700;}.t-rea{color:#6b2f8f;font-weight:700;}.t-nt{color:#7a5200;font-weight:700;}
-.lognote{margin-top:6px;padding:6px 8px;border-radius:8px;background:#fff8dc;border-left:3px solid #e0b020;font-size:13px;white-space:pre-wrap;}
-.card.s-ver{border-left:5px solid #2e9e50;}.card.s-chk{border-left:5px solid #2f78c4;}.card.s-pen{border-left:5px solid #e07a3a;}
-.folder{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:14px 0 6px;padding:10px 12px;border-radius:12px;font-weight:800;cursor:pointer;user-select:none;}
-.folder small{font-weight:700;opacity:.85;}
-.folder.f-ver{background:#d7f0de;color:#146c31;}.folder.f-chk{background:#d9e8f7;color:#16508f;}.folder.f-pen{background:#ffe6d3;color:#b04a14;}
-.chip.c-ver.on{background:#2e9e50;border-color:#2e9e50;color:#fff;}.chip.c-chk.on{background:#2f78c4;border-color:#2f78c4;color:#fff;}.chip.c-pen.on{background:#e07a3a;border-color:#e07a3a;color:#fff;}.chip.c-rea.on{background:#8a4fb0;border-color:#8a4fb0;color:#fff;}.chip.c-nt.on{background:#d9a514;border-color:#d9a514;color:#fff;}
+.rv{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;margin-right:4px;background:#e6e6e6;color:#444;}
+.rv.ver{background:var(--accent-d);color:#fff;}.rv.chk{background:#d9e8f7;color:#1d4e7a;}.rv.rea{background:#fff0d6;color:#8a5a00;}
+.lognote{margin-top:6px;padding:6px 8px;border-radius:8px;background:#f5f5f2;font-size:13px;white-space:pre-wrap;}
 .logdur{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;}
 /* Intake lot sticker (shown after a Harvest is logged). The label is always black on white so it prints and scans in either theme. */
 .lotov{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;}
@@ -332,7 +326,7 @@ let tickTimer=null;
 let syncSeq=0;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
  sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,lotSticker:null,bedScan:null,bedScanRaw:'',intakeIn:'',scanBusy:false,
- pausingId:null,pauseReason:'',pauseCustom:'',logStatus:'',logOpen:{},startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{},presence:null,startScan:null,presScan:{raw:'',busy:false,msg:''},bedLive:{},beds:null,bedFilter:'',bedHist:{}};
+ pausingId:null,pauseReason:'',pauseCustom:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{},presence:null,startScan:null,presScan:{raw:'',busy:false,msg:''},bedLive:{},beds:null,bedFilter:'',bedHist:{}};
 const HOLD_MS=60000;   // how long a just-confirmed Start is trusted over a server answer that has not caught up
 
 const PAUSE_TYPES=['Break','Lunch','End of Day','Others'];
@@ -392,9 +386,7 @@ async function syncActiveSessionsCore_(force){
  const recentDone={};localOnly.forEach(x=>{if(Date.now()-(x.endTime||0)<=GRACE_MS)recentDone[x.id]=1;});
  const haveLocal={};localOnly.forEach(x=>{haveLocal[x.id]=1;});
  // History rows for a session that is still open are hand-off records (a reassignment writes one), not completions.
- const srvById={};(st.serverDone||[]).forEach(x=>{srvById[x.id]=x;});
- const withReview=x=>{const v=srvById[x.id];return v?Object.assign({},x,{notes:v.notes,reviewStatus:v.reviewStatus,verifiedBy:v.verifiedBy,verifiedDate:v.verifiedDate,checkedBy:v.checkedBy,checkedDate:v.checkedDate,reassignments:v.reassignments}):x;};
- const localCompleted=localOnly.map(withReview).concat((st.serverDone||[]).filter(x=>!haveLocal[x.id]&&!liveIds[x.id]));   // this device's own row wins; the server adds the rest
+ const localCompleted=localOnly.concat((st.serverDone||[]).filter(x=>!haveLocal[x.id]&&!liveIds[x.id]));   // this device's own row wins; the server adds the rest
  // FIX: get-my-sessions can still return a row that is already finished (workbook says COMPLETED), and this
  // mapper used to turn anything that was not PAUSED/ASSIGNED into 'active' - so a task you just completed
  // came straight back as a running card (timer counting from its start time) next to its Completed History
@@ -686,7 +678,7 @@ async function confirmComplete(id){
  if(kind==='SCOUT'&&!st.sc.noIssues&&!String(st.sc.symptom||'').trim()){st.cardErr[id]='Describe what you saw, or tick "No issues found on this walk".';render();return;}
  if(kind==='CONTROL'&&(!String(st.app.product||'').trim()||!String(st.app.qty||'').trim())){st.cardErr[id]='Enter the product and the quantity applied before finishing.';render();return;}
  st.pending[id]='completing';delete st.cardErr[id];st.err=null;st.lastChange=Date.now();render();
- let r=await api('end-activity',{sessionId:id,scoutFinding:kind==='SCOUT'?{domain:st.sc.domain,severity:st.sc.severity,symptom:st.sc.symptom,requiresAction:!!st.sc.requiresAction,noIssues:!!st.sc.noIssues}:undefined,applicationProduct:kind==='CONTROL'?String(st.app.product||'').trim():undefined,applicationQuantity:kind==='CONTROL'?String(st.app.qty||'').trim():undefined,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?(st.coldChain==='yes'?true:st.coldChain==='no'?false:undefined):undefined,scannedBed:s.activityId==='ACT_018'?((st.bedScan?st.bedScan.raw:(st.bedScanRaw||'').trim())||undefined):undefined,intakeLotId:s.activityId==='ACT_018'?((st.intakeIn||'').trim()||undefined):undefined});
+ let r=await api('end-activity',{sessionId:id,scoutFinding:kind==='SCOUT'?{domain:st.sc.domain,severity:st.sc.severity,symptom:st.sc.symptom,requiresAction:!!st.sc.requiresAction,noIssues:!!st.sc.noIssues,photo:st.sc.photo?st.sc.photo.dataUrl:undefined}:undefined,applicationProduct:kind==='CONTROL'?String(st.app.product||'').trim():undefined,applicationQuantity:kind==='CONTROL'?String(st.app.qty||'').trim():undefined,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?(st.coldChain==='yes'?true:st.coldChain==='no'?false:undefined):undefined,scannedBed:s.activityId==='ACT_018'?((st.bedScan?st.bedScan.raw:(st.bedScanRaw||'').trim())||undefined):undefined,intakeLotId:s.activityId==='ACT_018'?((st.intakeIn||'').trim()||undefined):undefined});
  if(handleAuthError(r)){delete st.pending[id];return;}
  // A lost reply, or "not active" because the first tap already closed it: ask the server before calling it a failure.
  if(isTransient_(r)||(!r.ok&&r.code==='SESSION_NOT_ACTIVE')){if(await sessionIsClosed_(id))r={ok:true};}
@@ -869,14 +861,7 @@ function dayLabel_(ms){
  return new Date(ms).toLocaleDateString([],{weekday:'short',month:'short',day:'numeric',year:'numeric'});
 }
 function timeOf_(ms){return ms?new Date(ms).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'';}
-function statusKey_(s){return s.reviewStatus==='VERIFIED'?'ver':(s.reviewStatus==='CHECKED'?'chk':'pen');}
-function statusMatch_(s,f){
- if(!f)return true;
- if(f==='rea')return (s.reassignments||[]).length>0;
- if(f==='nt')return !!String(s.notes||'').trim();
- return statusKey_(s)===f;
-}
-function filteredLog_(skipStatus){
+function filteredLog_(){
  const now=new Date();let from=0;
  if(st.logRange==='today'){from=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();}
  else if(st.logRange==='7d'){from=Date.now()-7*86400000;}
@@ -884,58 +869,40 @@ function filteredLog_(skipStatus){
  return doneRows_().filter(s=>endOf_(s)>=from
    &&(!st.logAct||s.activityName===st.logAct)
    &&(!st.logBlock||s.block===st.logBlock)
-   &&(!q||String(s.bedId).toUpperCase().includes(q))
-   &&(skipStatus||statusMatch_(s,st.logStatus)))
+   &&(!q||String(s.bedId).toUpperCase().includes(q)))
   .sort((a,b)=>endOf_(b)-endOf_(a));
 }
 function dtOf_(iso){if(!iso)return '';const d=new Date(iso);return isNaN(d.getTime())?'':d.toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});}
 function reviewHtml_(s){
+ if(!s.reviewStatus&&!s.notes&&!(s.reassignments||[]).length)return '';
  let out='';
- if(s.reviewStatus==='VERIFIED')out+=`<div class="sub"><span class="rv ver">✔ Verified</span><span class="t-ver">by ${esc(s.verifiedBy||'a manager')}</span>${s.verifiedDate?' · '+esc(dtOf_(s.verifiedDate)):''}</div>`;
- else if(s.reviewStatus==='CHECKED')out+=`<div class="sub"><span class="rv chk">✓ Checked</span><span class="t-chk">by ${esc(s.checkedBy||'a manager')}</span>${s.checkedDate?' · '+esc(dtOf_(s.checkedDate)):''} · <span class="t-pen">awaiting verification</span></div>`;
- else out+=`<div class="sub"><span class="rv pen">● Not yet reviewed</span></div>`;
- (s.reassignments||[]).forEach(x=>{out+=`<div class="sub"><span class="rv rea">⇄ ${/close/i.test(x.mode)?'Closed & new':'Reassigned'}</span><span class="t-rea">${esc(x.fromName||'unassigned')} → ${esc(x.toName)}</span> by ${esc(x.byName)}${x.at?' · '+esc(dtOf_(x.at)):''}${x.note?' — '+esc(x.note):''}</div>`;});
- if(s.notes)out+=`<div class="lognote"><span class="t-nt">Notes:</span> ${esc(s.notes)}</div>`;
+ if(s.reviewStatus==='VERIFIED')out+=`<div class="sub"><span class="rv ver">Verified</span>by ${esc(s.verifiedBy||'a manager')}${s.verifiedDate?' · '+esc(dtOf_(s.verifiedDate)):''}</div>`;
+ else if(s.reviewStatus==='CHECKED')out+=`<div class="sub"><span class="rv chk">Checked</span>by ${esc(s.checkedBy||'a manager')}${s.checkedDate?' · '+esc(dtOf_(s.checkedDate)):''} · awaiting verification</div>`;
+ else if(s.reviewStatus==='COMPLETED')out+=`<div class="sub"><span class="rv">Not yet reviewed</span></div>`;
+ (s.reassignments||[]).forEach(x=>{out+=`<div class="sub"><span class="rv rea">${/close/i.test(x.mode)?'Closed & new':'Reassigned'}</span>${esc(x.fromName||'unassigned')} → ${esc(x.toName)} by ${esc(x.byName)}${x.at?' · '+esc(dtOf_(x.at)):''}${x.note?' — '+esc(x.note):''}</div>`;});
+ if(s.notes)out+=`<div class="lognote"><b>Notes:</b> ${esc(s.notes)}</div>`;
  return out;
-}
-const LOG_FOLDERS_=[['ver','Verified','✔'],['chk','Checked, awaiting verification','✓'],['pen','Not yet reviewed','●']];
-function toggleFolder_(k){st.logOpen[k]=st.logOpen[k]===false;render();}
-function logCardHtml_(s){
- return `<div class="card s-${statusKey_(s)}"><div class="logrow"><div>
-    <div style="font-weight:700;">${esc(s.bedId)} · ${esc(s.block)}</div>
-    <div class="sub">${esc(actLine_(s))}</div>
-    <div class="sub">${esc(timeOf_(s.startTime))} – ${esc(timeOf_(s.endTime))}</div>${reviewHtml_(s)}</div>
-    <div class="logdur">${fmt(elapsed(s))}</div></div></div>`;
 }
 function logListHtml_(){
  const rows=filteredLog_();
  if(!rows.length)return `<p class="sub" style="margin-top:14px;">${doneRows_().length?'No completed tasks match these filters.':(st.doneErr?'No completed tasks on this device. Your server history could not be loaded.':'No completed tasks yet.')}</p>`;
  const total=rows.reduce((a,s)=>a+Math.max(0,elapsed(s)),0);
  let out=`<div class="logsum"><span><b>${rows.length}</b> task${rows.length===1?'':'s'}</span><span>Total time <b>${fmt(total)}</b></span></div>`;
- LOG_FOLDERS_.forEach(([k,label,icon])=>{
-  const g=rows.filter(s=>statusKey_(s)===k);
-  if(!g.length)return;
-  const open=st.logOpen[k]!==false, t=g.reduce((a,s)=>a+Math.max(0,elapsed(s)),0);
-  out+=`<div class="folder f-${k}" onclick="toggleFolder_('${k}')"><span>${open?'▾':'▸'} 📁 ${icon} ${esc(label)}</span><small>${g.length} · ${fmt(t)}</small></div>`;
-  if(!open)return;
-  const groups={},order=[];
-  g.forEach(s=>{const d=dayKey_(endOf_(s));if(!groups[d]){groups[d]=[];order.push(d);}groups[d].push(s);});
-  order.forEach(d=>{
-   const gg=groups[d],tt=gg.reduce((a,s)=>a+Math.max(0,elapsed(s)),0);
-   out+=`<div class="dayhead"><span>${esc(dayLabel_(endOf_(gg[0])))}</span><span>${gg.length} · ${fmt(tt)}</span></div>`;
-   out+=gg.map(logCardHtml_).join('');
-  });
+ const groups={},order=[];
+ rows.forEach(s=>{const k=dayKey_(endOf_(s));if(!groups[k]){groups[k]=[];order.push(k);}groups[k].push(s);});
+ order.forEach(k=>{
+  const g=groups[k],t=g.reduce((a,s)=>a+Math.max(0,elapsed(s)),0);
+  out+=`<div class="dayhead"><span>${esc(dayLabel_(endOf_(g[0])))}</span><span>${g.length} · ${fmt(t)}</span></div>`;
+  out+=g.map(s=>`<div class="card"><div class="logrow"><div>
+    <div style="font-weight:700;">${esc(s.bedId)} · ${esc(s.block)}</div>
+    <div class="sub">${esc(actLine_(s))}</div>
+    <div class="sub">${esc(timeOf_(s.startTime))} – ${esc(timeOf_(s.endTime))}</div>${reviewHtml_(s)}</div>
+    <div class="logdur">${fmt(elapsed(s))}</div></div></div>`).join('');
  });
  return out;
 }
 function onLogQuery(v){st.logQuery=v;const el=document.getElementById('logList');if(el)el.innerHTML=logListHtml_();}
 function setLog_(k,v){st[k]=v;render();}
-function statusChipsHtml_(){
- const base=filteredLog_(true);
- const n=f=>base.filter(s=>statusMatch_(s,f)).length;
- const c=(f,l,cls)=>`<button class="chip ${cls||''} ${st.logStatus===f?'on':''}" onclick="setLog_('logStatus','${f}')">${l} (${n(f)})</button>`;
- return `<div class="chips">${c('','All')}${c('ver','✔ Verified','c-ver')}${c('chk','✓ Checked','c-chk')}${c('pen','● Not reviewed','c-pen')}${c('rea','⇄ Reassigned','c-rea')}${c('nt','Notes','c-nt')}</div>`;
-}
 function renderLog(){
  const rows=doneRows_();
  const acts=Array.from(new Set(rows.map(s=>s.activityName).filter(Boolean))).sort();
@@ -949,7 +916,6 @@ function renderLog(){
  ${errBanner()}
  ${st.doneErr?`<div class="banner">Could not load your full history from the server (${esc(st.doneErr)}). Only tasks finished on this device are shown. Tap Refresh to retry.</div>`:''}
  <div class="chips">${chip('today','Today')}${chip('7d','Last 7 days')}${chip('all','All')}</div>
- ${statusChipsHtml_()}
  <div class="filters">
   <select onchange="setLog_('logAct',this.value)">${opt('',st.logAct,'All activities')}${acts.map(a=>opt(a,st.logAct,a)).join('')}</select>
   <select onchange="setLog_('logBlock',this.value)">${opt('',st.logBlock,'All blocks')}${blocks.map(b=>opt(b,st.logBlock,b)).join('')}</select>
@@ -1296,6 +1262,26 @@ document.addEventListener('click', async e => {
 /* ---- Scouting finding (submit-scout-finding). A worker logs an observation for one or more beds. ---- */
 const SCOUT_DOMAINS_UI_=[['PestPressure','Pest pressure'],['DiseasePressure','Disease'],['PlantCondition','Plant condition'],['WeedCompetition','Weed competition'],['SoilWater','Soil / water']];
 const SCOUT_SEV_UI_=['LOW','MEDIUM','HIGH','CRITICAL'];
+/* Optional scouting photo: resized in the browser to JPEG and sent with the finding as a data URL. */
+function scoutPhotoPick_(input){
+ const f=input&&input.files&&input.files[0]; if(!f) return;
+ const tgt=st.scout||st.sc; if(!tgt) return;
+ if(!/^image\//.test(f.type)){ tgt.photoErr='Choose an image file.'; render(); return; }
+ const url=URL.createObjectURL(f), img=new Image();
+ img.onload=()=>{ const k=Math.min(1,1280/Math.max(img.width,img.height)), c=document.createElement('canvas');
+   c.width=Math.max(1,Math.round(img.width*k)); c.height=Math.max(1,Math.round(img.height*k));
+   c.getContext('2d').drawImage(img,0,0,c.width,c.height); URL.revokeObjectURL(url);
+   tgt.photo={name:f.name||'photo',dataUrl:c.toDataURL('image/jpeg',0.8)}; tgt.photoErr=null; render(); };
+ img.onerror=()=>{ URL.revokeObjectURL(url); tgt.photoErr='Could not read that photo. Try another.'; render(); };
+ img.src=url;
+}
+function scoutPhotoClear_(){ const tgt=st.scout||st.sc; if(tgt){ tgt.photo=null; tgt.photoErr=null; render(); } }
+function scoutPhotoHtml_(d){
+ return `<div style="margin-top:10px;"><label>Photo (optional)</label>
+  ${d.photo?`<div style="display:flex;gap:8px;align-items:center;"><img src="${d.photo.dataUrl}" alt="Attached photo" style="width:72px;height:72px;object-fit:cover;border-radius:8px;"><button class="btn secondary" type="button" onclick="scoutPhotoClear_()">Remove photo</button></div>`
+  :`<input type="file" accept="image/*" capture="environment" onchange="scoutPhotoPick_(this)">`}
+  ${d.photoErr?`<div class="banner">${esc(d.photoErr)}</div>`:''}</div>`;
+}
 function scoutOpen_(){ st.scoutNote=null; st.scout={beds:st.selBed||'',domain:'PestPressure',severity:'MEDIUM',symptom:'',notes:'',requiresAction:false,busy:false,err:null}; render(); }
 function scoutClose_(){ st.scout=null; render(); }
 function scoutSet_(k,v){ if(st.scout) st.scout[k]=v; }
@@ -1314,6 +1300,7 @@ function scoutOverlay_(){
   <label style="margin-top:10px;">Notes (optional)</label>
   <textarea rows="2" maxlength="500" oninput="scoutSet_('notes',this.value)">${esc(d.notes)}</textarea>
   <label style="margin-top:10px;display:flex;gap:8px;align-items:center;"><input type="checkbox" ${d.requiresAction?'checked':''} onchange="scoutSet_('requiresAction',this.checked)"> Needs manager action</label>
+  ${scoutPhotoHtml_(d)}
   ${d.err?`<div class="banner">${esc(d.err)}</div>`:''}
   <div style="display:flex;gap:8px;margin-top:12px;"><button class="btn" style="flex:1;" ${d.busy?'disabled':''} onclick="scoutSubmit_()">${d.busy?'Saving…':'Save finding'}</button><button class="btn secondary" style="flex:1;" onclick="scoutClose_()">Cancel</button></div>
  </div></div>`;
@@ -1324,7 +1311,7 @@ async function scoutSubmit_(){
  if(!beds){ d.err='Enter at least one bed ID.'; render(); return; }
  if(!String(d.symptom||'').trim()){ d.err='Describe what you saw.'; render(); return; }
  d.busy=true; d.err=null; render();
- const r=await api('submit-scout-finding',{bedIds:beds,domain:d.domain,severity:d.severity,symptom:d.symptom,notes:d.notes,requiresAction:!!d.requiresAction});
+ const r=await api('submit-scout-finding',{bedIds:beds,domain:d.domain,severity:d.severity,symptom:d.symptom,notes:d.notes,requiresAction:!!d.requiresAction,photo:d.photo?d.photo.dataUrl:undefined});
  if(handleAuthError(r)){ if(st.scout) st.scout.busy=false; render(); return; }
  if(r.ok){ const n=(r.data&&r.data.findingIds||[]).length; st.scout=null; st.scoutNote='Logged '+n+' finding'+(n===1?'':'s')+'.'; render(); return; }
  if(st.scout){ st.scout.busy=false; st.scout.err=r.error||'Could not save the finding ('+(r.code||'error')+').'; }
@@ -1345,7 +1332,8 @@ function completionFormHtml_(s){
    <label style="margin-top:8px;">Severity</label><select onchange="st.sc.severity=this.value">${SCOUT_SEV_LIST_.map(v=>`<option value="${v}" ${d.severity===v?'selected':''}>${v.charAt(0)+v.slice(1).toLowerCase()}</option>`).join('')}</select>
    <div class="chk"><input type="checkbox" id="noIssues" ${d.noIssues?'checked':''} onchange="st.sc.noIssues=this.checked;render()"><label for="noIssues" style="margin:0;">No issues found on this walk</label></div>
    ${d.noIssues?'':`<label style="margin-top:8px;">What did you see?</label><input type="text" maxlength="200" value="${esc(d.symptom)}" oninput="st.sc.symptom=this.value" placeholder="e.g. aphids on outer leaves">`}
-   <div class="chk"><input type="checkbox" id="needsAct" ${d.requiresAction?'checked':''} ${d.noIssues?'disabled':''} onchange="st.sc.requiresAction=this.checked"><label for="needsAct" style="margin:0;">Needs manager action</label></div>`;
+   <div class="chk"><input type="checkbox" id="needsAct" ${d.requiresAction?'checked':''} ${d.noIssues?'disabled':''} onchange="st.sc.requiresAction=this.checked"><label for="needsAct" style="margin:0;">Needs manager action</label></div>
+   ${scoutPhotoHtml_(d)}`;
  }
  if(kind==='CONTROL'){
   const a=st.app;
