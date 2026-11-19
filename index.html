@@ -116,7 +116,7 @@ const APP_KEY='WorkerApp';
 /* Read-only actions are safe to repeat, so a transient failure (Apps Script hiccup, dropped signal) is retried
    quietly instead of surfacing "The server could not complete that request." Writes are NEVER blindly retried
    (a repeated start/pause/end could double-record); they are reconciled against the server instead. */
-const READ_ACTIONS_={'get-my-sessions':1,'get-my-completed':1,'scan-bed':1};
+const READ_ACTIONS_={'get-my-sessions':1,'get-my-completed':1,'scan-bed':1,'get-irrigation-session-context':1};
 const sleep_=ms=>new Promise(t=>setTimeout(t,ms));
 async function api(action,payload){
  let r=await apiOnce_(action,payload);
@@ -327,6 +327,7 @@ let syncSeq=0;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
  sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,lotSticker:null,bedScan:null,bedScanRaw:'',intakeIn:'',scanBusy:false,
  pausingId:null,pauseReason:'',pauseCustom:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{},presence:null,startScan:null,presScan:{raw:'',busy:false,msg:''},bedLive:{},beds:null,bedFilter:'',bedHist:{}};
+st.irrCtx={};st.irrBusy={};   // ACT_031: irrigation context per started session (see loadIrrCtx_)
 const HOLD_MS=60000;   // how long a just-confirmed Start is trusted over a server answer that has not caught up
 
 const PAUSE_TYPES=['Break','Lunch','End of Day','Others'];
@@ -407,6 +408,7 @@ async function syncActiveSessionsCore_(force){
  });
  const before=sessSig_();
  st.sessions=serverActive.concat(localCompleted).sort((a,b)=>b.startTime-a.startTime);
+ st.sessions.forEach(x=>{loadIrrCtx_(x);});   // ACT_031: once a session is running, fetch its irrigation context (no-op for other activities / waiting cards)
  // Redraw only when something on screen changed. Rebuilding the page for nothing is what swallowed taps (a tap that lands
  // while the DOM is replaced never fires) and dropped focus from the Notes/Quantity box.
  if(force||before!==sessSig_()||st.err)render();
@@ -665,6 +667,65 @@ async function resumeS(id){
 /* ---- Fertilizer (GovernanceEngine.gs): the manager enters type, brand and quantity when assigning the task. The worker only sees them. ---- */
 function isFert_(s){return !!s&&s.isFertilizer===true;}
 function fertFromRow_(r){if(!r)return null;const o=r.fertilizer&&typeof r.fertilizer==='object'?r.fertilizer:null;const g=(a,b)=>String((r[a]!=null&&r[a]!=='')?r[a]:(o&&o[b]!=null?o[b]:'')) ;const f={type:g('Fert_Type','type'),brand:g('Fert_Brand','brand'),qty:(r.Fert_Quantity!=null&&r.Fert_Quantity!=='')?r.Fert_Quantity:(o&&o.quantity!=null?o.quantity:''),unit:g('Fert_Unit','unit'),organic:g('Fert_Organic','organic'),method:g('Fert_Method','method'),notes:g('Fert_Notes','notes')};if(!f.type&&!f.brand&&f.qty==='')return null;return f;}
+/* ================= ACT_031 Irrigation: active-session panel =================
+   Read-only. Everything shown comes from the server's get-irrigation-session-context (the manager calendar's own numbers for the bed's
+   CURRENT cohort); nothing is calculated or defaulted here. Shown only once the session is running (active/paused), never on the
+   WAITING card. Missing optional values show a plain fallback, never a guess. */
+function isIrrigation_(s){return !!s&&(s.activityId==='ACT_031'||s.activityName==='Irrigation');}
+async function loadIrrCtx_(s,force){
+ if(!isIrrigation_(s)||!(s.status==='active'||s.status==='paused'))return;
+ const id=s.id,cur=st.irrCtx[id];
+ if(st.irrBusy[id])return;
+ if(!force&&cur&&Date.now()-cur.at<(cur.err?30000:600000))return;   // fresh enough; Refresh on the card forces a reload
+ st.irrBusy[id]=1;if(force)render();
+ const r=await api('get-irrigation-session-context',{sessionId:id});
+ delete st.irrBusy[id];
+ if(handleAuthError(r))return;
+ st.irrCtx[id]=r&&r.ok?{at:Date.now(),data:r.data,err:null}:{at:Date.now(),data:cur&&cur.data||null,err:friendlyErr_(r,'Could not load the irrigation details.')};
+ if(st.screen==='home'&&!st.completingId&&!st.pausingId)render();   // never redraw under a form the worker is filling in
+}
+function irrFmtDate_(iso){const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||''));if(!m)return '';return new Date(+m[1],+m[2]-1,+m[3]).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});}
+function irrigationPanelHtml_(s){
+ if(!isIrrigation_(s)||!(s.status==='active'||s.status==='paused'))return '';
+ const box=inner=>`<div style="margin-top:8px;padding:8px 10px;border:1px solid #b9d3e6;border-radius:8px;background:#EEF5FA;">${inner}</div>`;
+ const head='<div class="sub" style="font-weight:700;margin-bottom:2px;">💧 Irrigation requirement</div>';
+ const e=st.irrCtx[s.id],busy=!!st.irrBusy[s.id];
+ const retry=`<button class="btn secondary" style="margin-top:6px;" ${busy?'disabled':''} onclick="loadIrrCtx_(st.sessions.find(x=>x.id==='${esc(s.id)}'),true)">${busy?'Loading…':'Reload'}</button>`;
+ if(!e)return box(head+`<div class="sub"><span class="spin" style="display:inline-block;vertical-align:-3px;margin-right:6px;"></span>Loading irrigation details…</div>`);
+ if(!e.data)return box(head+`<div class="sub">${esc(e.err||'Could not load the irrigation details.')}</div>${retry}`);
+ const d=e.data,c=d.cohort,q=d.requirement||{};
+ const row=(k,v)=>`<div class="sub"><b>${k}:</b> ${v}</div>`;
+ const na=t=>`<span style="opacity:.7;">${t}</span>`;
+ const bedLine=row('Bed',esc(d.bed.bedId)+' · '+esc(d.bed.blockId||s.block||''));
+ if(!c)return box(head+bedLine+`<div class="sub" style="margin-top:4px;">${esc(q.message||'No active cohort is assigned to this bed.')}</div>`+retry);
+ let h=head+bedLine+row('Crop',esc(c.cropName||c.cropId||'')+(c.cropId&&c.cropName?' ('+esc(c.cropId)+')':''))
+  +row('Cohort',esc(c.cohortId)+(c.plantingDate?' · planted '+esc(irrFmtDate_(c.plantingDate)):''))
+  +row('Growth stage',c.stage?esc(c.stage):na('Not recorded'));
+ if(c.sessionCohortMismatch)h+=`<div class="sub" style="margin-top:4px;color:var(--warn);">This bed now holds ${esc(c.cohortId)}. Details below are for that cohort.</div>`;
+ if(q.state!=='SCHEDULED'){
+  h+=`<div class="sub" style="margin-top:6px;">${esc(q.message||'')}${q.nextDate?' Next scheduled: '+esc(irrFmtDate_(q.nextDate))+'.':''}</div>`;
+  return box(h+retry);
+ }
+ const st_=q.dueStatus,when=irrFmtDate_(q.scheduledDate);
+ const dueTxt=st_==='OVERDUE'?'Overdue · was due '+when:q.due?'Due · '+when:'Scheduled · '+when;
+ h+=row('Irrigation',esc(dueTxt)+(q.of?` <span style="opacity:.7;">(#${q.sequence} of ${q.of})</span>`:''));
+ if(q.lifecycleStage)h+=row('Profile stage',esc(q.lifecycleStage)+(q.reducedDepth?' · reduced depth (pre-harvest)':q.reducedFrequency?' · reduced frequency (pre-harvest)':''));
+ const gal=q.targetGallons!=null?`<b>${esc(q.targetGallons)} gal</b>`:na('Not calculated');
+ const depth=q.targetDepthInches!=null?` · target depth ${esc(q.targetDepthInches)} in`:'';
+ h+=row('Water requirement',gal+depth);
+ const rt=q.runtime&&q.runtime.minutes!=null?`${esc(q.runtime.minutes)} min <span style="opacity:.7;">(whole zone, not this bed alone)</span>`:na('Not calculated');
+ h+=row('Zone run time',rt);
+ h+=row('Zone',q.zoneId?esc(q.zoneId):na('Not assigned'));
+ h+=row('Shift',q.shiftWindow?esc(q.shiftWindow):na('Not defined'));
+ h+=row('Pressure',q.targetPsi!=null?esc(q.targetPsi)+' psi':na('N/A'));
+ const notes=[];
+ if(q.profile&&q.profile.notes)notes.push(q.profile.notes);
+ (q.alerts||[]).forEach(a=>notes.push(a));
+ h+=`<div class="sub" style="margin-top:6px;"><b>Instructions:</b> Apply the amount shown; do not change the zone or schedule yourself. While watering, watch for leaks, pooling, runoff or abnormal delivery and tell your manager if you see any.</div>`;
+ notes.forEach(n=>{h+=`<div class="sub" style="margin-top:2px;">• ${esc(n)}</div>`;});
+ if(e.err)h+=`<div class="sub" style="margin-top:4px;color:var(--warn);">${esc(e.err)} Showing the last details loaded.</div>`;
+ return box(h+retry);
+}
 function fertLine_(s){const f=s&&s.fert;if(!f)return '';const row=(k,v)=>v===''||v==null?'':`<div class="sub"><b>${k}:</b> ${esc(v)}</div>`;const org=f.organic==='ORGANIC'?'Organic':f.organic==='NON_ORGANIC'?'Non-organic':f.organic;return `<div style="margin-top:6px;padding:6px 8px;border:1px solid #bcd6bf;border-radius:8px;background:#EEF5EE;"><div class="sub" style="font-weight:700;">Fertilizer to apply</div>${row('Type',f.type)}${row('Brand',f.brand)}${row('Quantity',(f.qty!==''?f.qty:'')+(f.unit?' '+f.unit:''))}${row('Organic',org)}${row('Method',f.method)}${row('Notes',f.notes)}</div>`;}
 function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain='';st.bedScan=null;st.bedScanRaw='';st.intakeIn='';st.scanBusy=false;
  const _cs=st.sessions.find(x=>x.id===id)||{};st.scoutNote=null;st.sc={domain:SCOUT_ACT_DOMAIN_UI_[_cs.activityName]||'PlantCondition',severity:'MEDIUM',symptom:'',requiresAction:false,noIssues:false};st.app={product:'',qty:''};render();}
@@ -964,6 +1025,7 @@ function renderHome(){
       ${s.description?`<div class="sub">${esc(s.description)}</div>`:''}
       ${dsPrepLine_(s)}
       ${fertLine_(s)}
+      ${irrigationPanelHtml_(s)}
       ${s.reassignedFromName?`<div class="sub re">↩ Reassigned from ${esc(s.reassignedFromName)}${s.managerName?' by '+esc(s.managerName):''}</div>`
         :s.managerName?`<div class="sub by">Assigned by ${esc(s.managerName)}</div>`:''}
       ${fmtAssigned_(s.assignedTime)?`<div class="sub dt">Date assigned: ${esc(fmtAssigned_(s.assignedTime))}</div>`:''}</div>
@@ -974,7 +1036,7 @@ function renderHome(){
       ${startScanHtml_(s)}`):completingNow?`
       <div class="progress"><span class="spin"></span>Completing…</div>`:completing?`
       <div class="sub" style="font-weight:700;margin:2px 0 6px;">Mark ${esc(s.activityName)} on ${esc(s.bedId)} as complete?</div>
-      ${s.isFertilizer?(s.fert?'':`<div class="sub" style="margin:4px 0 6px;">The manager has not entered the fertilizer details for this task. You can still complete it; the manager will be notified.</div>`):(s.qtyBased?`<label>Quantity (${esc(s.unit)})</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:'')}
+      ${s.isFertilizer?(s.fert?'':`<div class="sub" style="margin:4px 0 6px;">The manager has not entered the fertilizer details for this task. You can still complete it; the manager will be notified.</div>`):(s.qtyBased?`<label>${isIrrigation_(s)?'Gallons applied (gal)':'Quantity ('+esc(s.unit)+')'}</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:'')}
       ${s.activityId==='ACT_018'?`<label style="margin-top:8px;">Grade</label><select onchange="st.grade=this.value"><option value="" ${!st.grade?'selected':''}>Not graded</option>${((s.grades&&s.grades.length)?s.grades:['A','B','C','Cull']).map(g=>`<option value="${esc(g)}" ${st.grade===g?'selected':''}>${esc(g)}</option>`).join('')}</select><label style="margin-top:8px;">Cold chain kept (cool and shaded)?</label><select id="ccSel" onchange="st.coldChain=this.value"><option value="" ${!st.coldChain?'selected':''}>Choose Yes or No</option><option value="yes" ${st.coldChain==='yes'?'selected':''}>Yes</option><option value="no" ${st.coldChain==='no'?'selected':''}>No</option></select>`:''}
       ${s.activityId==='ACT_018'?bedScanHtml_(s):''}
       ${s.activityId==='ACT_018'?`<div class="chk"><input type="checkbox" id="finalChk" ${st.isFinal?'checked':''} onchange="st.isFinal=this.checked"><label for="finalChk" style="margin:0;">Final harvest for this cohort</label></div>`:''}
