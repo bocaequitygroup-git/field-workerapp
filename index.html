@@ -685,16 +685,6 @@ async function loadIrrCtx_(s,force){
  if(st.screen==='home'&&!st.completingId&&!st.pausingId)render();   // never redraw under a form the worker is filling in
 }
 function irrFmtDate_(iso){const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||''));if(!m)return '';return new Date(+m[1],+m[2]-1,+m[3]).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});}
-/** Reads a shift like "1 (22:00-01:30)" and says whether the zone's window is open on THIS phone's clock. null when the text has no readable range. */
-function irrShiftNote_(win){
- const m=/(\d{1,2}):(\d{2})\s*[-\u2013\u2014]\s*(\d{1,2}):(\d{2})/.exec(String(win||''));if(!m)return null;
- const a=+m[1]*60+ +m[2],b=+m[3]*60+ +m[4],d=new Date(),n=d.getHours()*60+d.getMinutes();
- const inside=a<=b?(n>=a&&n<b):(n>=a||n<b);   // overnight windows (22:00-01:30) wrap past midnight
- const t=x=>{const h=Math.floor(x/60)%24,mm=x%60;return (h%12||12)+':'+String(mm).padStart(2,'0')+' '+(h<12?'AM':'PM');};
- if(inside)return {inside:true,text:'The zone\'s shift window is open now (until '+t(b)+').'};
- const opensToday=n<a;
- return {inside:false,text:'The zone\'s shift window is not open ('+t(a)+' \u2013 '+t(b)+'). It opens '+(opensToday?'today':'tomorrow')+' at '+t(a)+'.'};
-}
 function irrigationPanelHtml_(s){
  if(!isIrrigation_(s)||!(s.status==='active'||s.status==='paused'))return '';
  const box=inner=>`<div style="margin-top:8px;padding:8px 10px;border:1px solid #b9d3e6;border-radius:8px;background:#EEF5FA;">${inner}</div>`;
@@ -717,7 +707,7 @@ function irrigationPanelHtml_(s){
   return box(h+retry);
  }
  const st_=q.dueStatus,when=irrFmtDate_(q.scheduledDate);
- const dueTxt=st_==='OVERDUE'?'Overdue · was due '+when+' (this watering is late)':q.due?'Due · '+when:'Scheduled · '+when;
+ const dueTxt=q.offSchedule?'Not due today (assigned by your manager) · reference: '+when:st_==='OVERDUE'?'Overdue · was due '+when:q.due?'Due · '+when:'Scheduled · '+when;
  h+=row('Irrigation',esc(dueTxt)+(q.of?` <span style="opacity:.7;">(#${q.sequence} of ${q.of})</span>`:''));
  if(q.lifecycleStage)h+=row('Profile stage',esc(q.lifecycleStage)+(q.reducedDepth?' · reduced depth (pre-harvest)':q.reducedFrequency?' · reduced frequency (pre-harvest)':''));
  const est=q.estimated?' <span style="opacity:.7;font-size:11px;font-weight:700;">ESTIMATED</span>':'';
@@ -728,8 +718,6 @@ function irrigationPanelHtml_(s){
  h+=row('Zone run time',rt);
  h+=row('Zone',q.zoneId?esc(q.zoneId):na('Not assigned'));
  h+=row('Shift',q.shiftWindow?esc(q.shiftWindow):na('Not defined'));
- const sn=q.shiftWindow?irrShiftNote_(q.shiftWindow):null;
- if(sn)h+=`<div class="sub" style="margin-top:2px;${sn.inside?'':'color:var(--warn);font-weight:700;'}">${esc(sn.text)}${sn.inside?'':' <b>Overdue means the watering is late, not that the zone should be run right now.</b> Run it during the shift window unless your manager tells you otherwise.'}</div>`;
  h+=row('Pressure',q.targetPsi!=null?esc(q.targetPsi)+' psi':na('N/A'));
  const notes=[];
  if(q.profile&&q.profile.notes)notes.push(q.profile.notes);
