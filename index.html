@@ -1027,6 +1027,7 @@ function renderHome(){
       ${dsPrepLine_(s)}
       ${fertLine_(s)}
       ${irrigationPanelHtml_(s)}
+      ${zoneTraceFormHtml_(s)}
       ${s.reassignedFromName?`<div class="sub re">↩ Reassigned from ${esc(s.reassignedFromName)}${s.managerName?' by '+esc(s.managerName):''}</div>`
         :s.managerName?`<div class="sub by">Assigned by ${esc(s.managerName)}</div>`:''}
       ${fmtAssigned_(s.assignedTime)?`<div class="sub dt">Date assigned: ${esc(fmtAssigned_(s.assignedTime))}</div>`:''}</div>
@@ -1408,6 +1409,73 @@ function completionFormHtml_(s){
  return '';
 }
 
+/* ================= ACT_013 IrrigationCheck: dual-mode submission =================
+   The worker records either a Routine Irrigation Inspection (an anomaly goes through the existing exception path) or a
+   Physical Zone-Trace Verification (the zone traced, or Inconclusive). Submitting NEVER assigns a zone, never writes
+   BED_MASTER.Zone and never releases ZONE_UNVERIFIED. Only a manager sign-off can do that.
+   Route: submit-zone-trace (IrrigationZoneTrace.gs). */
+const ZT_ZONE_OPTIONS_=['IRR-Z01','IRR-Z02','IRR-Z03','IRR-Z04','IRR-Z05','IRR-Z06','IRR-Z07'];
+const ZT_INCONCLUSIVE_='__INCONCLUSIVE__';
+const ZT_SEVERITY_=['LOW','MEDIUM','HIGH','CRITICAL'];
+function isIrrCheck_(s){return !!s&&(s.activityId==='ACT_013'||s.activityName==='IrrigationCheck');}
+function ztDraft_(id){
+ if(!st.zt)st.zt={};
+ if(!st.zt[id])st.zt[id]={mode:'ROUTINE_INSPECTION',anomalyFound:false,faultType:'',severity:'MEDIUM',notes:'',zoneChoice:'',lineNotes:'',busy:false,err:null,done:null};
+ return st.zt[id];
+}
+function ztSet_(id,k,v,redraw){ ztDraft_(id)[k]=v; if(redraw)render(); }
+function ztDoneText_(data){
+ const o=data&&data.outcome;
+ if(o==='ANOMALY')return 'Anomaly reported to your manager.';
+ if(o==='NORMAL')return 'Inspection logged. No anomaly.';
+ if(o==='ZONE_OBSERVED')return 'Zone trace sent. It waits for manager sign-off, so the zone is not assigned yet.';
+ if(o==='UNRESOLVED')return 'Recorded as inconclusive. The zone stays unverified until a confident trace is submitted.';
+ return 'Submitted.';
+}
+function zoneTraceFormHtml_(s){
+ if(!isIrrCheck_(s)||!(s.status==='active'||s.status==='paused'))return '';
+ const d=ztDraft_(s.id), id=esc(s.id), isZone=d.mode==='ZONE_TRACE';
+ const box=inner=>`<div style="margin-top:8px;padding:8px 10px;border:1px solid #d9cbe6;border-radius:8px;background:#F7F3FB;">${inner}</div>`;
+ let h=`<div class="sub" style="font-weight:700;margin-bottom:4px;">🔍 Irrigation check</div>`;
+ h+=`<label>What are you recording?</label><select onchange="ztSet_('${id}','mode',this.value,true)">`
+  +`<option value="ROUTINE_INSPECTION" ${isZone?'':'selected'}>Routine Irrigation Inspection</option>`
+  +`<option value="ZONE_TRACE" ${isZone?'selected':''}>Physical Zone-Trace Verification</option></select>`;
+ if(!isZone){
+  h+=`<div class="chk"><input type="checkbox" id="ztA${id}" ${d.anomalyFound?'checked':''} onchange="ztSet_('${id}','anomalyFound',this.checked,true)"><label for="ztA${id}" style="margin:0;">Anomaly found (leak, pooling, runoff, low or uneven flow)</label></div>`;
+  if(d.anomalyFound){
+   h+=`<label style="margin-top:8px;">What did you see?</label><input type="text" maxlength="200" value="${esc(d.faultType)}" oninput="ztSet_('${id}','faultType',this.value)" placeholder="e.g. Leak at valve box">`
+    +`<label style="margin-top:8px;">Severity</label><select onchange="ztSet_('${id}','severity',this.value,true)">${ZT_SEVERITY_.map(v=>`<option value="${v}" ${d.severity===v?'selected':''}>${v.charAt(0)+v.slice(1).toLowerCase()}</option>`).join('')}</select>`;
+  }
+  h+=`<label style="margin-top:8px;">Notes (optional)</label><textarea rows="2" maxlength="500" oninput="ztSet_('${id}','notes',this.value)">${esc(d.notes)}</textarea>`;
+ } else {
+  h+=`<label style="margin-top:8px;">Irrigation zone you traced</label><select onchange="ztSet_('${id}','zoneChoice',this.value,true)"><option value="">Choose a zone…</option>`
+   +ZT_ZONE_OPTIONS_.map(z=>`<option value="${z}" ${d.zoneChoice===z?'selected':''}>${z}</option>`).join('')
+   +`<option value="${ZT_INCONCLUSIVE_}" ${d.zoneChoice===ZT_INCONCLUSIVE_?'selected':''}>Inconclusive / unresolved</option></select>`;
+  h+=`<label style="margin-top:8px;">Line / emitter notes (optional)</label><textarea rows="2" maxlength="500" oninput="ztSet_('${id}','lineNotes',this.value)" placeholder="e.g. Line runs to emitters at bed 4; joint at bed 2 is capped">${esc(d.lineNotes)}</textarea>`;
+  h+=`<div class="sub" style="margin-top:4px;">Your trace is saved for a manager to review. It does not assign the zone or release the bed.</div>`;
+ }
+ if(d.err)h+=`<div class="banner" style="margin-top:8px;">${esc(d.err)}</div>`;
+ if(d.done)h+=`<div class="ok-note" style="margin-top:8px;">${esc(d.done)}</div>`;
+ h+=`<button class="btn" style="margin-top:8px;" ${d.busy?'disabled':''} onclick="ztSubmit_('${id}')">${d.busy?'Submitting…':'Submit irrigation check'}</button>`;
+ return box(h);
+}
+async function ztSubmit_(id){
+ const s=st.sessions.find(x=>x.id===id), d=ztDraft_(id);
+ if(!s||d.busy)return;
+ const isZone=d.mode==='ZONE_TRACE';
+ if(!isZone&&d.anomalyFound&&!String(d.faultType||'').trim()){d.err='Describe the anomaly you saw.';render();return;}
+ if(isZone&&!d.zoneChoice){d.err='Choose the zone you traced, or Inconclusive.';render();return;}
+ d.busy=true;d.err=null;d.done=null;render();
+ const inconclusive=d.zoneChoice===ZT_INCONCLUSIVE_;
+ const body=isZone
+  ?{sessionId:id,mode:'ZONE_TRACE',inconclusive:inconclusive,observedZone:inconclusive?undefined:d.zoneChoice,lineNotes:String(d.lineNotes||'').trim()}
+  :{sessionId:id,mode:'ROUTINE_INSPECTION',anomaly:{found:!!d.anomalyFound,faultType:String(d.faultType||'').trim(),severity:d.severity,notes:String(d.notes||'').trim(),requiresAction:true}};
+ const r=await api('submit-zone-trace',body);
+ if(handleAuthError(r)){d.busy=false;render();return;}
+ if(!r.ok){d.busy=false;d.err=friendlyErr_(r,'Could not record that check ('+(r.code||'error')+').');render();return;}
+ Object.assign(d,{busy:false,err:null,done:ztDoneText_(r.data),anomalyFound:false,faultType:'',notes:'',zoneChoice:'',lineNotes:''});
+ render();
+}
 function render(){
  const el=document.getElementById('app');
  if(st.screen==='login')el.innerHTML=renderLogin();
