@@ -1416,8 +1416,7 @@ function completionFormHtml_(s){
    Route: submit-zone-trace (IrrigationZoneTrace.gs). */
 const ZT_ZONE_OPTIONS_=['IRR-Z01','IRR-Z02','IRR-Z03','IRR-Z04','IRR-Z05','IRR-Z06','IRR-Z07'];
 const ZT_SEVERITY_=['LOW','MEDIUM','HIGH','CRITICAL'];
-/* Expected zone for a bed, from the layout plan (IrrigationLayoutGate.gs IRR_LAYOUT_). It is used only to ask the worker one question:
-   "did the trace reach this zone?". The full zone list is shown only when the answer is "a different zone". Beds outside the plan return ''. */
+/* Expected zone for a bed, from the layout plan (IrrigationLayoutGate.gs IRR_LAYOUT_). Beds outside the plan return ''. */
 function ztExpectedZone_(bedId){
  const m=/^(B[1-4]|Z5)-(\d{1,2})$/.exec(String(bedId||'').trim().toUpperCase()); if(!m) return '';
  const n=parseInt(m[2],10);
@@ -1428,17 +1427,17 @@ function ztExpectedZone_(bedId){
  if(m[1]==='Z5') return n>=1&&n<=11?'IRR-Z07':'';
  return '';
 }
-function ztBlockLabel_(bedId){ const p=String(bedId||'').trim().toUpperCase().split('-')[0]; return {B1:'Block 1',B2:'Block 2',B3:'Block 3',B4:'Block 4',Z5:'Zone 5'}[p]||'this block'; }
+/* Typed zone: only the explicit IRR-Z01..IRR-Z07 form (so "Z5" is never read as IRR-Z05). Returns '' when not valid. */
+function ztCanonZone_(raw){ const m=/^\s*IRR-Z0([1-7])\s*$/i.exec(String(raw||'')); return m?'IRR-Z0'+m[1]:''; }
 function isIrrCheck_(s){return !!s&&(s.activityId==='ACT_013'||s.activityName==='IrrigationCheck');}
 function ztDraft_(id){
  if(!st.zt)st.zt={};
- if(!st.zt[id])st.zt[id]={mode:'ROUTINE_INSPECTION',anomalyFound:false,faultType:'',severity:'MEDIUM',notes:'',trace:'',zoneChoice:'',lineNotes:'',busy:false,err:null,done:null};
+ if(!st.zt[id])st.zt[id]={mode:'ROUTINE_INSPECTION',anomalyFound:false,faultType:'',severity:'MEDIUM',notes:'',zoneSel:'',zoneTyped:'',lineNotes:'',busy:false,err:null,done:null};
  return st.zt[id];
 }
 function ztSet_(id,k,v,redraw){ ztDraft_(id)[k]=v; if(redraw)render(); }
-/* The worker answers one question. Choosing an answer clears any other answer, so nothing is ever carried over silently. */
-function ztPickTrace_(id,v){ const d=ztDraft_(id); d.trace=v; if(v!=='DIFFERENT') d.zoneChoice=''; d.err=null; render(); }
-function ztPickZone_(id,v){ const d=ztDraft_(id); d.trace='DIFFERENT'; d.zoneChoice=v; d.err=null; render(); }
+/* Dropdown choice. Leaving "Other zone" clears any typed zone, so an old entry can't be submitted by accident. */
+function ztPickZoneSel_(id,v){ const d=ztDraft_(id); d.zoneSel=v; if(v!=='OTHER') d.zoneTyped=''; d.err=null; render(); }
 function ztDoneText_(data){
  const o=data&&data.outcome;
  if(o==='ANOMALY')return 'Anomaly reported to your manager.';
@@ -1452,7 +1451,6 @@ function zoneTraceFormHtml_(s){
  const d=ztDraft_(s.id), id=esc(s.id), isZone=d.mode==='ZONE_TRACE';
  const exp=ztExpectedZone_(s.bedId), bed=esc(s.bedId||'this bed');
  const box=inner=>`<div style="margin-top:8px;padding:8px 10px;border:1px solid #d9cbe6;border-radius:8px;background:#F7F3FB;">${inner}</div>`;
- const choice=(on,label,act)=>`<button type="button" class="btn ${on?'':'secondary'} block" style="margin-top:6px;" onclick="${act}">${label}</button>`;
  let h=`<div class="sub" style="font-weight:700;margin-bottom:4px;">🔍 Irrigation check</div>`;
  h+=`<label>What are you recording?</label><select onchange="ztSet_('${id}','mode',this.value,true)">`
   +`<option value="ROUTINE_INSPECTION" ${isZone?'':'selected'}>Routine Irrigation Inspection</option>`
@@ -1465,22 +1463,20 @@ function zoneTraceFormHtml_(s){
   }
   h+=`<label style="margin-top:8px;">Notes (optional)</label><textarea rows="2" maxlength="500" oninput="ztSet_('${id}','notes',this.value)">${esc(d.notes)}</textarea>`;
  } else {
-  // ONE question for the worker. The zone list is never shown by default.
-  if(exp){
-   h+=`<div class="sub" style="font-weight:700;margin-top:10px;">Did the line you traced reach ${esc(exp)}?</div>`
-     +`<div class="sub" style="margin-top:2px;">${bed} is on the ${esc(ztBlockLabel_(s.bedId))} plan, so its expected zone is ${esc(exp)}. Tap the answer that matches what you traced. You do not need to remember zone numbers.</div>`
-     +choice(d.trace==='MATCH',`Yes, it reaches ${esc(exp)}`,`ztPickTrace_('${id}','MATCH')`)
-     +choice(d.trace==='DIFFERENT',`No, it reaches a different zone`,`ztPickTrace_('${id}','DIFFERENT')`);
-  } else {
-   h+=`<div class="sub" style="font-weight:700;margin-top:10px;">Which zone did the line reach?</div>`
-     +`<div class="sub" style="margin-top:2px;">${bed} is not on the layout plan, so pick the zone you traced.</div>`;
+  // The dropdown shows the bed's own zone, plus "Other zone" (type or pick) and "Inconclusive".
+  h+=`<label style="margin-top:8px;">Irrigation zone the line reached</label><select onchange="ztPickZoneSel_('${id}',this.value)">`
+   +`<option value="" ${d.zoneSel===''?'selected':''}>Select zone…</option>`
+   +(exp?`<option value="BED" ${d.zoneSel==='BED'?'selected':''}>${esc(exp)} (zone for ${bed})</option>`:'')
+   +`<option value="OTHER" ${d.zoneSel==='OTHER'?'selected':''}>Other zone… (type or pick)</option>`
+   +`<option value="INCONCLUSIVE" ${d.zoneSel==='INCONCLUSIVE'?'selected':''}>Inconclusive / unresolved</option></select>`;
+  if(d.zoneSel==='OTHER'){
+   h+=`<label style="margin-top:6px;">Type or pick the zone</label><input type="text" list="ztZones${id}" maxlength="12" value="${esc(d.zoneTyped)}" placeholder="e.g. IRR-Z03" oninput="ztSet_('${id}','zoneTyped',this.value)">`
+    +`<datalist id="ztZones${id}">${ZT_ZONE_OPTIONS_.map(z=>`<option value="${z}">`).join('')}</datalist>`
+    +`<div class="sub" style="margin-top:2px;">Use the form IRR-Z01 to IRR-Z07.</div>`;
   }
-  if(d.trace==='DIFFERENT'||!exp){
-   // the full list appears only after the worker says it is a different zone
-   const opts=ZT_ZONE_OPTIONS_.filter(z=>z!==exp);
-   h+=`<label style="margin-top:8px;">Zone the line reached</label><select onchange="ztPickZone_('${id}',this.value)"><option value="">Choose a zone…</option>${opts.map(z=>`<option value="${z}" ${d.zoneChoice===z?'selected':''}>${z}</option>`).join('')}</select>`;
-  }
-  h+=choice(d.trace==='INCONCLUSIVE',`Could not confirm (inconclusive)`,`ztPickTrace_('${id}','INCONCLUSIVE')`);
+  h+= exp
+    ? `<div class="sub" style="margin-top:4px;">The zone for ${bed} is ${esc(exp)}. Choose it if the line reaches ${esc(exp)}. Choose Other zone only if the line goes somewhere else.</div>`
+    : `<div class="sub" style="margin-top:4px;">${bed} is not on the layout plan, so choose Other zone and pick the zone the line reached.</div>`;
   h+=`<label style="margin-top:8px;">Line / emitter notes (optional)</label><textarea rows="2" maxlength="500" oninput="ztSet_('${id}','lineNotes',this.value)" placeholder="e.g. Line runs to emitters at bed 4; joint at bed 2 is capped">${esc(d.lineNotes)}</textarea>`;
   h+=`<div class="sub" style="margin-top:4px;">Your answer is saved for a manager to review. It does not assign the zone or release the bed.</div>`;
  }
@@ -1497,13 +1493,10 @@ async function ztSubmit_(id){
  if(!isZone&&d.anomalyFound&&!String(d.faultType||'').trim()){ fail('Describe the anomaly you saw.'); return; }
  let zone='', inconclusive=false;
  if(isZone){
-  if(d.trace==='INCONCLUSIVE'){ inconclusive=true; }
-  else if(d.trace==='MATCH'&&exp){ zone=exp; }
-  else if(!exp||d.trace==='DIFFERENT'){
-   zone=d.zoneChoice;
-   if(!zone){ fail('Choose the zone the line reached, or Inconclusive.'); return; }
-   if(exp&&zone===exp){ fail('That is the expected zone. Tap "Yes" instead, or choose the zone the line really reached.'); return; }
-  } else { fail(exp?'Answer the question first: Yes, a different zone, or Inconclusive.':'Choose the zone the line reached, or Inconclusive.'); return; }
+  if(d.zoneSel==='INCONCLUSIVE'){ inconclusive=true; }
+  else if(d.zoneSel==='BED'){ if(!exp){ fail('This bed has no zone on the layout plan. Choose Other zone.'); return; } zone=exp; }
+  else if(d.zoneSel==='OTHER'){ zone=ztCanonZone_(d.zoneTyped); if(!zone){ fail('Type the zone as IRR-Z01 to IRR-Z07, or pick it from the list.'); return; } }
+  else { fail('Select the zone the line reached, or Inconclusive.'); return; }
  }
  d.busy=true; d.err=null; d.done=null; render();
  const body=isZone
@@ -1512,7 +1505,7 @@ async function ztSubmit_(id){
  const r=await api('submit-zone-trace',body);
  if(handleAuthError(r)){d.busy=false;render();return;}
  if(!r.ok){d.busy=false;d.err=friendlyErr_(r,'Could not record that check ('+(r.code||'error')+').');render();return;}
- Object.assign(d,{busy:false,err:null,done:ztDoneText_(r.data),anomalyFound:false,faultType:'',notes:'',trace:'',zoneChoice:'',lineNotes:''});
+ Object.assign(d,{busy:false,err:null,done:ztDoneText_(r.data),anomalyFound:false,faultType:'',notes:'',zoneSel:'',zoneTyped:'',lineNotes:''});
  render();
 }
 function render(){
