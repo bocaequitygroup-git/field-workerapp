@@ -1417,12 +1417,28 @@ function completionFormHtml_(s){
 const ZT_ZONE_OPTIONS_=['IRR-Z01','IRR-Z02','IRR-Z03','IRR-Z04','IRR-Z05','IRR-Z06','IRR-Z07'];
 const ZT_INCONCLUSIVE_='__INCONCLUSIVE__';
 const ZT_SEVERITY_=['LOW','MEDIUM','HIGH','CRITICAL'];
+/* Expected zone for a bed, from the layout plan (IrrigationLayoutGate.gs IRR_LAYOUT_). It only pre-fills the worker's dropdown.
+   It is NOT a confirmed zone: the worker must trace the line, and the manager signs off. Beds outside the plan return ''. */
+function ztExpectedZone_(bedId){
+ const m=/^(B[1-4]|Z5)-(\d{1,2})$/.exec(String(bedId||'').trim().toUpperCase()); if(!m) return '';
+ const n=parseInt(m[2],10);
+ if(m[1]==='B1') return n>=1&&n<=15?'IRR-Z01':(n>=16&&n<=55?'IRR-Z02':'');
+ if(m[1]==='B2') return n>=1&&n<=55?'IRR-Z03':'';
+ if(m[1]==='B3') return n>=1&&n<=11?'IRR-Z04':(n>=12&&n<=55?'IRR-Z05':'');
+ if(m[1]==='B4') return n>=1&&n<=55?'IRR-Z06':'';
+ if(m[1]==='Z5') return n>=1&&n<=11?'IRR-Z07':'';
+ return '';
+}
+function ztBlockLabel_(bedId){ const p=String(bedId||'').trim().toUpperCase().split('-')[0]; return {B1:'Block 1',B2:'Block 2',B3:'Block 3',B4:'Block 4',Z5:'Zone 5'}[p]||'this block'; }
+/* Worker changed the zone (or chose Inconclusive): the value is now the worker's own reading, not the layout default. */
+function ztZoneChange_(id,v){ const d=ztDraft_(id); d.zoneChoice=v; d.zoneTouched=true; render(); }
 function isIrrCheck_(s){return !!s&&(s.activityId==='ACT_013'||s.activityName==='IrrigationCheck');}
 function ztDraft_(id){
  if(!st.zt)st.zt={};
- if(!st.zt[id])st.zt[id]={mode:'ROUTINE_INSPECTION',anomalyFound:false,faultType:'',severity:'MEDIUM',notes:'',zoneChoice:'',lineNotes:'',busy:false,err:null,done:null};
+ if(!st.zt[id])st.zt[id]={mode:'ROUTINE_INSPECTION',anomalyFound:false,faultType:'',severity:'MEDIUM',notes:'',zoneChoice:'',lineNotes:'',zoneTouched:false,busy:false,err:null,done:null};
  return st.zt[id];
 }
+function defaultedZone_(s,d){ const exp=ztExpectedZone_(s&&s.bedId); return !!exp&&!d.zoneTouched&&d.zoneChoice===exp; }
 function ztSet_(id,k,v,redraw){ ztDraft_(id)[k]=v; if(redraw)render(); }
 function ztDoneText_(data){
  const o=data&&data.outcome;
@@ -1448,9 +1464,14 @@ function zoneTraceFormHtml_(s){
   }
   h+=`<label style="margin-top:8px;">Notes (optional)</label><textarea rows="2" maxlength="500" oninput="ztSet_('${id}','notes',this.value)">${esc(d.notes)}</textarea>`;
  } else {
-  h+=`<label style="margin-top:8px;">Irrigation zone you traced</label><select onchange="ztSet_('${id}','zoneChoice',this.value,true)"><option value="">Choose a zone…</option>`
+  const exp=ztExpectedZone_(s.bedId);
+  if(!d.zoneTouched&&!d.zoneChoice&&exp) d.zoneChoice=exp;   // pre-fill; stops once the worker changes it
+  h+=`<label style="margin-top:8px;">Irrigation zone you traced</label><select onchange="ztZoneChange_('${id}',this.value)"><option value="">Choose a zone…</option>`
    +ZT_ZONE_OPTIONS_.map(z=>`<option value="${z}" ${d.zoneChoice===z?'selected':''}>${z}</option>`).join('')
    +`<option value="${ZT_INCONCLUSIVE_}" ${d.zoneChoice===ZT_INCONCLUSIVE_?'selected':''}>Inconclusive / unresolved</option></select>`;
+  h+=exp
+    ?`<div class="sub" style="margin-top:4px;">${d.zoneTouched?'Your reading. ':'Defaulted from '+esc(ztBlockLabel_(s.bedId))+'’s expected zone ('+esc(exp)+'). '}Change it only if the physical trace shows a different zone, or choose Inconclusive if you cannot confirm it.</div>`
+    :`<div class="sub" style="margin-top:4px;">No expected zone is on the layout plan for ${esc(s.bedId)}. Choose the zone you traced, or Inconclusive.</div>`;
   h+=`<label style="margin-top:8px;">Line / emitter notes (optional)</label><textarea rows="2" maxlength="500" oninput="ztSet_('${id}','lineNotes',this.value)" placeholder="e.g. Line runs to emitters at bed 4; joint at bed 2 is capped">${esc(d.lineNotes)}</textarea>`;
   h+=`<div class="sub" style="margin-top:4px;">Your trace is saved for a manager to review. It does not assign the zone or release the bed.</div>`;
  }
@@ -1468,12 +1489,12 @@ async function ztSubmit_(id){
  d.busy=true;d.err=null;d.done=null;render();
  const inconclusive=d.zoneChoice===ZT_INCONCLUSIVE_;
  const body=isZone
-  ?{sessionId:id,mode:'ZONE_TRACE',inconclusive:inconclusive,observedZone:inconclusive?undefined:d.zoneChoice,lineNotes:String(d.lineNotes||'').trim()}
+  ?{sessionId:id,mode:'ZONE_TRACE',inconclusive:inconclusive,observedZone:inconclusive?undefined:d.zoneChoice,lineNotes:(defaultedZone_(s,d)?'[Zone pre-filled from layout plan ('+d.zoneChoice+'); worker did not change it] ':'')+String(d.lineNotes||'').trim()}
   :{sessionId:id,mode:'ROUTINE_INSPECTION',anomaly:{found:!!d.anomalyFound,faultType:String(d.faultType||'').trim(),severity:d.severity,notes:String(d.notes||'').trim(),requiresAction:true}};
  const r=await api('submit-zone-trace',body);
  if(handleAuthError(r)){d.busy=false;render();return;}
  if(!r.ok){d.busy=false;d.err=friendlyErr_(r,'Could not record that check ('+(r.code||'error')+').');render();return;}
- Object.assign(d,{busy:false,err:null,done:ztDoneText_(r.data),anomalyFound:false,faultType:'',notes:'',zoneChoice:'',lineNotes:''});
+ Object.assign(d,{busy:false,err:null,done:ztDoneText_(r.data),anomalyFound:false,faultType:'',notes:'',zoneChoice:'',lineNotes:'',zoneTouched:false});
  render();
 }
 function render(){
