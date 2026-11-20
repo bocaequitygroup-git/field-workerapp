@@ -429,7 +429,7 @@ async function attemptLogin(){
  st.token=r.data.token;
  try{sessionStorage.setItem('vpos_session',JSON.stringify({me:st.me,token:st.token}));}catch(e){}
  st.workerIdInput='';st.pinInput='';
- loadForMe();go('home');syncActiveSessions_();loadBeds_();
+ loadForMe();go('home');syncActiveSessions_(true);loadBeds_();   // forced: repaints with the server's list when it answers
 }
 function doLogout(callServer){
  if(callServer!==false && st.token) api('logout',{device:(navigator.userAgent||'').slice(0,100)});
