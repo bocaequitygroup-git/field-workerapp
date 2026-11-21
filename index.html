@@ -114,7 +114,13 @@ select{width:100%;padding:12px;border-radius:var(--radius);border:1.5px solid va
 .irr-rules{margin-top:8px;padding:9px 11px;border-radius:10px;background:rgba(193,83,31,.1);border:1px solid rgba(193,83,31,.35);font-size:13px;}
 .irr-meta{margin-top:8px;padding:7px 10px;border-radius:10px;background:var(--bg);border:1px solid var(--border);}
 .irr-meta .sub{margin:2px 0;}
-.irr-reload{flex:none;padding:6px 11px!important;font-size:12px!important;}
+.irr-reload{flex:none;padding:6px 11px!important;font-size:12px!important;min-height:36px;}
+.irr-card{max-width:460px;}
+.irr-est{display:inline-block;margin-left:4px;padding:1px 6px;border-radius:999px;background:#FBEBD6;color:#8A4B0F;font-size:10px;font-weight:800;letter-spacing:.03em;vertical-align:1px;}
+.irr-note{font-size:11px;opacity:.75;}
+.irr-assign{margin:6px 0;}
+.irr-profile{margin-top:8px;padding:8px 10px;border-radius:10px;background:var(--bg);border:1px solid var(--border);}
+.irr-box-h button{margin-left:auto;}
 </style>
 </head>
 <body>
@@ -689,11 +695,12 @@ async function loadIrrCtx_(s,force){
  const id=s.id,cur=st.irrCtx[id];
  if(st.irrBusy[id])return;
  if(!force&&cur&&Date.now()-cur.at<(cur.err?30000:600000))return;   // fresh enough; Refresh on the card forces a reload
- st.irrBusy[id]=1;if(force)render();
+ st.irrBusy[id]=1;if(force)irrReloadUi_(id,true);
  const r=await api('get-irrigation-session-context',{sessionId:id});
  delete st.irrBusy[id];
  if(handleAuthError(r))return;
  st.irrCtx[id]=r&&r.ok?{at:Date.now(),data:r.data,err:null}:{at:Date.now(),data:cur&&cur.data||null,err:friendlyErr_(r,'Could not load the irrigation details.')};
+ irrReloadUi_(id,false);
  if(st.screen==='home'&&!st.completingId&&!st.pausingId)render();   // never redraw under a form the worker is filling in
 }
 function irrFmtDate_(iso){const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||''));if(!m)return '';return new Date(+m[1],+m[2]-1,+m[3]).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});}
@@ -710,83 +717,86 @@ function irrTopZone_(s,locLabel,completingNow){
  ${s.description?`<div class="sub" style="margin-top:2px;">${esc(s.description)}</div>`:''}
  ${dsPrepLine_(s)}${fertLine_(s)}`;
 }
-/** One cell of the 2x2 "what to set & watch at the valve/manifold" grid: a small-caps label over 1-2 data lines. */
+/** One cell of the 2x2 grid: a small-caps label over its data lines. */
 function irrGridCell_(label,lines){
  return `<div class="irr-cell"><div class="irr-cell-h">${esc(label)}</div>${lines.filter(Boolean).join('')}</div>`;
 }
-/** Compact strip: crop/cohort + who assigned this and when - background metadata, kept out of the field-action grid above. */
-function irrMetaStrip_(s,c){
+/** ESTIMATED pill: gallons and zone minutes stay estimates until bed dimensions and delivery are verified (IrrigationWater.gs). */
+function irrEstBadge_(on){return on?' <span class="irr-est">ESTIMATED</span>':'';}
+/** Cohort stage codes (e.g. GROWING, HARVEST_READY) shown as plain words. */
+function irrStageLabel_(v){const t=String(v||'').replace(/_/g,' ').trim().toLowerCase();return t?t.charAt(0).toUpperCase()+t.slice(1):'';}
+/** Reload button state only. Updates the button in place so no full render() runs under an open Pause or Complete form. */
+function irrReloadUi_(id,busy){const b=document.querySelector('[data-irr-reload="'+id+'"]');if(!b)return;b.disabled=!!busy;b.textContent=busy?'Loading…':'↻ Reload';}
+/** Crop & cohort: background metadata only. Never a watering instruction, kept apart from the field rules. */
+function irrCropStrip_(c){
  if(!c)return '';
  const cropTxt=esc(c.cropName||c.cropId||'')+(c.cropId&&c.cropName?' ('+esc(c.cropId)+')':'');
  const cohortTxt=esc(c.cohortId||'')+(c.plantingDate?' · planted '+esc(irrFmtDate_(c.plantingDate)):'');
+ return `<div class="irr-meta"><div class="sub">Crop &amp; Cohort: ${cropTxt}${cropTxt&&cohortTxt?' · ':''}${cohortTxt}</div></div>`;
+}
+/** Assigned by / Date assigned. renderHome() places this directly above the Pause and Complete buttons. */
+function irrAssignLine_(s){
  const by=s.reassignedFromName?`<span style="color:var(--c-re);font-weight:600;">↩ Reassigned from ${esc(s.reassignedFromName)}${s.managerName?' by '+esc(s.managerName):''}</span>`
    :s.managerName?`<span style="color:var(--c-by);font-weight:600;">Assigned by ${esc(s.managerName)}</span>`:'';
  const dt=fmtAssigned_(s.assignedTime);
  const dtHtml=dt?`<span style="color:var(--c-date);font-weight:600;">Date assigned: ${esc(dt)}</span>`:'';
- return `<div class="irr-meta">
-  <div class="sub">Crop &amp; Cohort: ${cropTxt}${cropTxt&&cohortTxt?' · ':''}${cohortTxt}</div>
-  ${(by||dtHtml)?`<div class="sub">Assignment: ${by}${by&&dtHtml?' · ':''}${dtHtml}</div>`:''}</div>`;
+ return (by||dtHtml)?`<div class="sub irr-assign">${by}${by&&dtHtml?' · ':''}${dtHtml}</div>`:'';
 }
-/* ================= ACT_031 Irrigation: active-session card, organized into 4 scan-able zones =================
-   Read-only. Everything below the Zone-1 heading comes from the server's get-irrigation-session-context (the manager
-   calendar's own numbers for the bed's CURRENT cohort); nothing is calculated or defaulted here. Shown only once the
-   session is running (active/paused), never on the WAITING card. Missing optional values show a plain fallback, never
-   a guess - that rule from the original irrigationPanelHtml_ is unchanged, only the layout is new:
-     Zone 1 - status badge + timer, bed/block heading, activity line, task description               (irrTopZone_)
-     Zone 2 - 2x2 grid: Zone & Shift / Run Time & Pressure / Water Target / Schedule & Stage            (irr-grid, below)
-     Zone 3 - fixed field-rules callout + profile/alert notes, then a compact Crop/Cohort + Assignment strip (irrMetaStrip_)
-     Zone 4 - Pause/Complete buttons, or the pause-type picker / complete form - unchanged, stays in renderHome()
-   The Reload button that used to sit at the foot of this box now sits in the Zone 2 header instead, so it is visible
-   without scrolling past the whole grid; it still calls the same loadIrrCtx_(...,true) and the same
-   get-irrigation-session-context guards still apply (never redraws over an open Pause or Complete form - see
-   loadIrrCtx_'s own st.completingId / st.pausingId check, untouched). */
+/* ACT_031 active-session card: 2x2 spec grid, watering rule kept apart from crop/cohort and profile notes.
+   Read-only. Every number comes from the server's get-irrigation-session-context; nothing is calculated or defaulted here.
+   Shown only once the session is running (active/paused). Layout:
+     header      "💧 Irrigation" + Reload (top-right, always present)
+     2x2 grid    Zone & Shift / Run Time & Pressure / Water Target / Schedule & Stage
+     rules       watering rule + leak/pooling/runoff/abnormal-delivery watch-for (fixed text)
+     profile     profile notes from IRRIGATION_PROFILE / calendar alerts (only when present)
+     crop strip  Crop & Cohort (background only)
+   Assigned by / Date assigned is rendered by renderHome() just above the Pause/Complete buttons (irrAssignLine_). */
 function irrigationPanelHtml_(s,completingNow){
  if(!isIrrigation_(s)||!(s.status==='active'||s.status==='paused'))return '';
  const e=st.irrCtx[s.id],busy=!!st.irrBusy[s.id];
- const reload=`<button class="btn secondary irr-reload" ${busy?'disabled':''} onclick="loadIrrCtx_(st.sessions.find(x=>x.id==='${esc(s.id)}'),true)">${busy?'Loading…':'↻ Reload'}</button>`;
+ const head=`<div class="irr-box-h"><span>💧 Irrigation</span><button class="btn secondary irr-reload" data-irr-reload="${esc(s.id)}" ${busy?'disabled':''} onclick="loadIrrCtx_(st.sessions.find(x=>x.id==='${esc(s.id)}'),true)">${busy?'Loading…':'↻ Reload'}</button></div>`;
  const na=t=>`<span style="opacity:.7;">${t}</span>`;
- const fallbackLoc=esc(s.bedId)+' · '+esc(s.block);
- const top=irrTopZone_(s,fallbackLoc,completingNow);
- if(!e)return top+`<div class="irr-box"><div class="sub"><span class="spin" style="display:inline-block;vertical-align:-3px;margin-right:6px;"></span>Loading irrigation details…</div></div>`;
- if(!e.data)return top+`<div class="irr-box"><div class="sub">${esc(e.err||'Could not load the irrigation details.')}</div>${reload}</div>`;
+ // irrTopZone_ escapes its own arguments, so pass raw strings here (never pre-escaped).
+ const top=irrTopZone_(s,s.bedId+' · '+s.block,completingNow);
+ if(!e)return top+`<div class="irr-box">${head}<div class="sub"><span class="spin" style="display:inline-block;vertical-align:-3px;margin-right:6px;"></span>Loading irrigation details…</div></div>`;
+ if(!e.data)return top+`<div class="irr-box">${head}<div class="sub">${esc(e.err||'Could not load the irrigation details.')}</div></div>`;
  const d=e.data,c=d.cohort,q=d.requirement||{};
- const topD=irrTopZone_(s,esc(d.bed.bedId)+' · '+esc(d.bed.blockId||s.block||''),completingNow);
- if(!c)return topD+`<div class="irr-box"><div class="sub">${esc(q.message||'No active cohort is assigned to this bed.')}</div>${reload}</div>`;
+ const topD=irrTopZone_(s,d.bed.bedId+' · '+(d.bed.blockId||s.block||''),completingNow);
+ if(!c)return topD+`<div class="irr-box">${head}<div class="sub">${esc(q.message||'No active cohort is assigned to this bed.')}</div></div>`;
  const mismatch=c.sessionCohortMismatch?`<div class="sub" style="margin-top:4px;color:var(--warn);">This bed now holds ${esc(c.cohortId)}. Details above are for that cohort.</div>`:'';
  if(q.state!=='SCHEDULED'){
-  return topD+`<div class="irr-box"><div class="sub">${esc(q.message||'')}${q.nextDate?' Next scheduled: '+esc(irrFmtDate_(q.nextDate))+'.':''}</div>${reload}</div>`
-   +mismatch+irrMetaStrip_(s,c);
+  return topD+`<div class="irr-box">${head}<div class="sub">${esc(q.message||'')}${q.nextDate?' Next scheduled: '+esc(irrFmtDate_(q.nextDate))+'.':''}</div></div>`+mismatch+irrCropStrip_(c);
  }
- // ---- Zone 2: the 2x2 field-action grid - exactly the same numbers the old stacked rows showed, just grouped ----
+ // ---- 2x2 grid ----
  const stWord=q.dueStatus,when=irrFmtDate_(q.scheduledDate);
  const dueTxt=q.offSchedule?'Not due today (assigned by your manager) · ref. '+when:stWord==='OVERDUE'?'Overdue · was due '+when:q.due?'Due · '+when:'Scheduled · '+when;
- const seq=q.of?` <span style="opacity:.7;">(#${q.sequence} of ${q.of})</span>`:'';
- const est=q.estimated?' <span style="opacity:.7;font-size:11px;font-weight:700;">ESTIMATED</span>':'';
- const profileLine='Stage: '+(c.stage?esc(c.stage):na('Not recorded'))
-   +(q.lifecycleStage?' · Profile: '+esc(q.lifecycleStage)+(q.reducedDepth?' · reduced depth (pre-harvest)':q.reducedFrequency?' · reduced frequency (pre-harvest)':''):'');
- const grid=`<div class="irr-box"><div class="irr-box-h"><span>💧 Field action specs</span>${reload}</div><div class="irr-grid">
+ const seq=q.of?` <span style="opacity:.7;">(#${esc(q.sequence)} of ${esc(q.of)})</span>`:'';
+ const hasRun=q.runtime&&q.runtime.minutes!=null;
+ const runTxt=hasRun?`<b>${esc(q.runtime.minutes)} min</b>${irrEstBadge_(q.estimated)}`:na('Not calculated');
+ const galTxt=q.targetGallons!=null?`<b>${esc(q.targetGallons)} gal</b>${irrEstBadge_(q.estimated)}`:na('Not calculated');
+ const grid=`<div class="irr-grid">
    ${irrGridCell_('Zone & Shift',[
-     `<div>${q.zoneId?esc(q.zoneId):na('Not assigned')}</div>`,
-     `<div>${q.shiftWindow?esc(q.shiftWindow):na('Not defined')}</div>`])}
+     `<div>Zone: ${q.zoneId?esc(q.zoneId):na('Not assigned')}</div>`,
+     `<div>Shift: ${q.shiftWindow?esc(q.shiftWindow):na('Not defined')}</div>`])}
    ${irrGridCell_('Run Time & Pressure',[
-     `<div>${q.runtime&&q.runtime.minutes!=null?`<b>${esc(q.runtime.minutes)} min</b> <span style="opacity:.7;">(${q.estimated?'ESTIMATED · ':''}whole zone, not this bed alone)</span>`:na('Not calculated')}</div>`,
+     `<div>Zone run time: ${runTxt}</div>`,
+     hasRun?`<div class="irr-note">whole zone, not this bed alone</div>`:'',
      `<div>Pressure: ${q.targetPsi!=null?esc(q.targetPsi)+' psi':na('N/A')}</div>`])}
    ${irrGridCell_('Water Target',[
-     `<div>${q.targetGallons!=null?`<b>${esc(q.targetGallons)} gal</b>${est}`:na('Not calculated')}</div>`,
-     `<div>${q.targetDepthInches!=null?'Target depth: '+esc(q.targetDepthInches)+' in':na('Not recorded')}</div>`])}
+     `<div>Water requirement: ${galTxt}</div>`,
+     `<div>Target depth: ${q.targetDepthInches!=null?esc(q.targetDepthInches)+' in':na('Not recorded')}</div>`])}
    ${irrGridCell_('Schedule & Stage',[
-     `<div>${esc(dueTxt)}${seq}</div>`,
-     `<div>${profileLine}</div>`])}
- </div></div>`;
- // ---- Zone 3: fixed field-rules callout + any profile/alert notes, then the compact crop/cohort + assignment strip ----
- const notes=[];
- if(q.profile&&q.profile.notes)notes.push(q.profile.notes);
- (q.alerts||[]).forEach(a=>notes.push(a));
- const rules=`<div class="irr-rules"><b>Field rules:</b> Apply the amount shown; do not change the zone or schedule yourself. While watering, watch for leaks, pooling, runoff or abnormal delivery and tell your manager if you see any.`
-   +notes.map(n=>`<div class="sub" style="margin-top:4px;">• ${esc(n)}</div>`).join('')+`</div>`
-   +mismatch
-   +(e.err?`<div class="sub" style="margin-top:4px;color:var(--warn);">${esc(e.err)} Showing the last details loaded.</div>`:'');
- return topD+grid+rules+irrMetaStrip_(s,c);
+     `<div>Irrigation: ${esc(dueTxt)}${seq}</div>`,
+     `<div>Growth stage: ${c.stage?esc(irrStageLabel_(c.stage)):na('Not recorded')}</div>`,
+     `<div>Profile stage: ${q.lifecycleStage?esc(q.lifecycleStage)+(q.reducedDepth?' · reduced depth':q.reducedFrequency?' · reduced frequency':''):na('Not set')}</div>`])}
+ </div>`;
+ // ---- watering rule and warnings (fixed field rules), kept separate from metadata ----
+ const rules=`<div class="irr-rules"><div><b>Watering rule:</b> Apply the amount shown. Do not change the zone or schedule yourself.</div><div style="margin-top:4px;"><b>Watch for:</b> leaks, pooling, runoff or abnormal delivery. Tell your manager if you see any.</div></div>`;
+ // ---- profile notes (only when present) ----
+ const notes=[];if(q.profile&&q.profile.notes)notes.push(q.profile.notes);(q.alerts||[]).forEach(a=>notes.push(a));
+ const prof=notes.length?`<div class="irr-profile"><div class="irr-cell-h">Profile notes</div>${notes.map(n=>`<div class="sub">• ${esc(n)}</div>`).join('')}</div>`:'';
+ const err=e.err?`<div class="sub" style="margin-top:4px;color:var(--warn);">${esc(e.err)} Showing the last details loaded.</div>`:'';
+ return topD+`<div class="irr-box">${head}${grid}</div>`+rules+prof+mismatch+err+irrCropStrip_(c);
 }
 function fertLine_(s){const f=s&&s.fert;if(!f)return '';const row=(k,v)=>v===''||v==null?'':`<div class="sub"><b>${k}:</b> ${esc(v)}</div>`;const org=f.organic==='ORGANIC'?'Organic':f.organic==='NON_ORGANIC'?'Non-organic':f.organic;return `<div style="margin-top:6px;padding:6px 8px;border:1px solid #bcd6bf;border-radius:8px;background:#EEF5EE;"><div class="sub" style="font-weight:700;">Fertilizer to apply</div>${row('Type',f.type)}${row('Brand',f.brand)}${row('Quantity',(f.qty!==''?f.qty:'')+(f.unit?' '+f.unit:''))}${row('Organic',org)}${row('Method',f.method)}${row('Notes',f.notes)}</div>`;}
 function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain='';st.bedScan=null;st.bedScanRaw='';st.intakeIn='';st.scanBusy=false;
@@ -1095,7 +1105,7 @@ function renderHome(){
         :s.managerName?`<div class="sub by">Assigned by ${esc(s.managerName)}</div>`:''}
       ${fmtAssigned_(s.assignedTime)?`<div class="sub dt">Date assigned: ${esc(fmtAssigned_(s.assignedTime))}</div>`:''}</div>
       <div class="timer" id="timer-${s.id}" style="text-align:right;">${assigned?'Not started':fmt(elapsed(s))}</div></div>`;
-    return `<div class="card">
+    return `<div class="card${irrActive?' irr-card':''}">
     ${topSection}
     ${st.cardErr[s.id]?`<div class="banner">${esc(st.cardErr[s.id])}</div>`:''}
     ${justDone?`<div class="done-note">✓ Completed</div>`:assigned?(starting?`
@@ -1123,6 +1133,7 @@ function renderHome(){
         <button class="btn secondary" id="pauseOk" ${st.busy||!pauseReasonFinal_()?'disabled':''} onclick="confirmPause('${s.id}')">${st.busy?'Pausing…':'Confirm Pause'}</button>
       </div>`:`
       ${st.flash[s.id]==='started'&&s.status==='active'?'<div class="ok-note">✓ Started - timer running</div>':''}
+      ${irrActive?irrAssignLine_(s):''}
       <div class="row">
         ${s.status==='active'?`<button class="btn secondary" ${st.busy?'disabled':''} onclick="openPause('${s.id}')">Pause</button>`
           :`<button class="btn secondary" ${st.busy?'disabled':''} onclick="resumeS('${s.id}')">${st.busy?'Resuming…':'Resume'}</button>`}
