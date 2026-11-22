@@ -103,18 +103,18 @@ select{width:100%;padding:12px;border-radius:var(--radius);border:1.5px solid va
 #camDlg{border:none;border-radius:var(--radius);padding:12px;width:min(92vw,420px);background:var(--card);color:var(--text);}
 #camDlg::backdrop{background:rgba(0,0,0,.6);}
 #camDlg video{width:100%;border-radius:8px;background:#000;display:block;}
-/* ---- Irrigation session card (ACT_031): 4-zone mobile layout ---- */
-.irr-topline{display:flex;align-items:center;justify-content:space-between;gap:8px;}
-.irr-loc{font-weight:800;font-size:17px;margin-top:5px;line-height:1.2;}
-.irr-box{margin-top:8px;padding:9px 10px;border:1px solid #b9d3e6;border-radius:10px;background:#EEF5FA;}
-.irr-box-h{display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:700;margin-bottom:7px;}
-.irr-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;}
-.irr-cell{background:rgba(255,255,255,.55);border:1px solid rgba(0,0,0,.08);border-radius:8px;padding:7px 9px;font-size:13px;line-height:1.35;}
-.irr-cell-h{font-size:10px;font-weight:800;letter-spacing:.03em;text-transform:uppercase;color:#4c6578;margin-bottom:3px;}
-.irr-rules{margin-top:8px;padding:9px 11px;border-radius:10px;background:rgba(193,83,31,.1);border:1px solid rgba(193,83,31,.35);font-size:13px;}
-.irr-meta{margin-top:8px;padding:7px 10px;border-radius:10px;background:var(--bg);border:1px solid var(--border);}
-.irr-meta .sub{margin:2px 0;}
-.irr-reload{flex:none;padding:6px 11px!important;font-size:12px!important;}
+/* ---- Irrigation requirement box (ACT_031) and Irrigation check panel (ACT_013) ---- */
+.irr-box{margin-top:8px;padding:9px 10px;border:1px solid #b9d3e6;border-radius:10px;background:#EEF5FA;font-size:13px;line-height:1.4;}
+.irr-box .irr-h{font-weight:700;margin-bottom:3px;}
+.irr-box .irr-r{margin:1px 0;}
+.irr-box .irr-est{opacity:.7;font-size:11px;font-weight:700;}
+.izt-box{margin-top:8px;padding:9px 10px;border:1px solid #d9cdea;border-radius:10px;background:#F5F1FA;font-size:13px;line-height:1.4;}
+.izt-box .izt-h{font-weight:700;margin-bottom:3px;}
+.izt-box label{margin-top:8px;}
+.izt-box .izt-chk{display:flex;align-items:flex-start;gap:8px;margin-top:8px;}
+.izt-box .izt-chk input{margin-top:3px;flex:none;}
+.izt-box textarea{width:100%;box-sizing:border-box;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;}
+.izt-box .izt-sent{color:var(--accent);font-weight:700;margin-top:8px;}
 </style>
 </head>
 <body>
@@ -324,7 +324,7 @@ function mapServerSession_(r){
   startTime: isAssigned?null:new Date(r.Start_Time).getTime(), totalPausedMs:ps.totalPausedMs, pausedAt:ps.pausedAt,
   // Set only when a manager assigned/reassigned this session (worker self-started
   // tasks have no Manager_ID) - see reassignActivity()/get-my-sessions in the backend.
-  managerName:r.Manager_Name||'', reassignedFromName:r.Reassigned_From_Name||r.Reassigned_From||'',
+  managerName:r.Manager_Name||'', layoutZone:String(r.Layout_Zone||'').trim(), reassignedFromName:r.Reassigned_From_Name||r.Reassigned_From||'',
   assignedTime:r.Assigned_Time||r.assignedTime||'',
   // FIX: "My Active Sessions" only ever showed the bare Activity_Name label (e.g.
   // "Mulching") with nothing explaining what the activity actually is. Server now
@@ -339,7 +339,7 @@ let syncSeq=0;
 let st={screen:'login',me:null,token:null,workerIdInput:'',pinInput:'',err:null,busy:false,connected:false,
  sessions:[],scanQuery:'',selBed:null,selAct:null,showAllActs:false,showHistory:false,logRange:'7d',logAct:'',logBlock:'',logQuery:'',completingId:null,qty:'',unit:'',notes:'',isFinal:false,lotSticker:null,bedScan:null,bedScanRaw:'',intakeIn:'',scanBusy:false,
  pausingId:null,pauseReason:'',pauseCustom:'',startingId:null,pending:{},cardErr:{},lastChange:0,holds:{},flash:{},presence:null,startScan:null,presScan:{raw:'',busy:false,msg:''},bedLive:{},beds:null,bedFilter:'',bedHist:{}};
-st.irrCtx={};st.irrBusy={};   // ACT_031: irrigation context per started session (see loadIrrCtx_)
+st.irrCtx={};st.irrBusy={};st.izt={};   // ACT_031: irrigation context per started session (see loadIrrCtx_)
 const HOLD_MS=60000;   // how long a just-confirmed Start is trusted over a server answer that has not caught up
 
 const PAUSE_TYPES=['Break','Lunch','End of Day','Others'];
@@ -697,96 +697,128 @@ async function loadIrrCtx_(s,force){
  if(st.screen==='home'&&!st.completingId&&!st.pausingId)render();   // never redraw under a form the worker is filling in
 }
 function irrFmtDate_(iso){const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||''));if(!m)return '';return new Date(+m[1],+m[2]-1,+m[3]).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});}
-/* ---- Zone 1: status badge + live timer, then bed/block heading, activity line, short task description.
- *      The timer keeps id="timer-${s.id}" so updateTimers() can keep patching it in place every second
- *      (see the big comment on updateTimers() - this must never be rebuilt by anything but that function
- *      and the normal render() cycle, or the worker's focus/typing elsewhere on the screen gets reset). */
-function irrTopZone_(s,locLabel,completingNow){
- const label=completingNow?'COMPLETING':s.status.toUpperCase();
- const badge=`<span class="badge ${s.status==='paused'?'paused':''}">${label}${s.status==='paused'&&s.pauseType?' · '+esc(s.pauseType):''}</span>`;
- return `<div class="irr-topline"><div>${badge}</div><div class="timer" id="timer-${s.id}">${fmt(elapsed(s))}</div></div>
- <div class="irr-loc">${esc(locLabel)}</div>
- <div class="sub" style="margin-top:1px;">${esc(actLine_(s))}</div>
- ${s.description?`<div class="sub" style="margin-top:2px;">${esc(s.description)}</div>`:''}
- ${dsPrepLine_(s)}${fertLine_(s)}`;
-}
-/** One cell of the 2x2 "what to set & watch at the valve/manifold" grid: a small-caps label over 1-2 data lines. */
-function irrGridCell_(label,lines){
- return `<div class="irr-cell"><div class="irr-cell-h">${esc(label)}</div>${lines.filter(Boolean).join('')}</div>`;
-}
-/** Compact strip: crop/cohort + who assigned this and when - background metadata, kept out of the field-action grid above. */
-function irrMetaStrip_(s,c){
- if(!c)return '';
- const cropTxt=esc(c.cropName||c.cropId||'')+(c.cropId&&c.cropName?' ('+esc(c.cropId)+')':'');
- const cohortTxt=esc(c.cohortId||'')+(c.plantingDate?' · planted '+esc(irrFmtDate_(c.plantingDate)):'');
- const by=s.reassignedFromName?`<span style="color:var(--c-re);font-weight:600;">↩ Reassigned from ${esc(s.reassignedFromName)}${s.managerName?' by '+esc(s.managerName):''}</span>`
-   :s.managerName?`<span style="color:var(--c-by);font-weight:600;">Assigned by ${esc(s.managerName)}</span>`:'';
- const dt=fmtAssigned_(s.assignedTime);
- const dtHtml=dt?`<span style="color:var(--c-date);font-weight:600;">Date assigned: ${esc(dt)}</span>`:'';
- return `<div class="irr-meta">
-  <div class="sub">Crop &amp; Cohort: ${cropTxt}${cropTxt&&cohortTxt?' · ':''}${cohortTxt}</div>
-  ${(by||dtHtml)?`<div class="sub">Assignment: ${by}${by&&dtHtml?' · ':''}${dtHtml}</div>`:''}</div>`;
-}
-/* ================= ACT_031 Irrigation: active-session card, organized into 4 scan-able zones =================
-   Read-only. Everything below the Zone-1 heading comes from the server's get-irrigation-session-context (the manager
-   calendar's own numbers for the bed's CURRENT cohort); nothing is calculated or defaulted here. Shown only once the
-   session is running (active/paused), never on the WAITING card. Missing optional values show a plain fallback, never
-   a guess - that rule from the original irrigationPanelHtml_ is unchanged, only the layout is new:
-     Zone 1 - status badge + timer, bed/block heading, activity line, task description               (irrTopZone_)
-     Zone 2 - 2x2 grid: Zone & Shift / Run Time & Pressure / Water Target / Schedule & Stage            (irr-grid, below)
-     Zone 3 - fixed field-rules callout + profile/alert notes, then a compact Crop/Cohort + Assignment strip (irrMetaStrip_)
-     Zone 4 - Pause/Complete buttons, or the pause-type picker / complete form - unchanged, stays in renderHome()
-   The Reload button that used to sit at the foot of this box now sits in the Zone 2 header instead, so it is visible
-   without scrolling past the whole grid; it still calls the same loadIrrCtx_(...,true) and the same
-   get-irrigation-session-context guards still apply (never redraws over an open Pause or Complete form - see
-   loadIrrCtx_'s own st.completingId / st.pausingId check, untouched). */
-function irrigationPanelHtml_(s,completingNow){
+/* ================= ACT_031 Irrigation: "Irrigation requirement" box =================
+   Read-only. Everything shown comes from the server's get-irrigation-session-context (the manager calendar's own numbers for the
+   bed's CURRENT cohort); nothing is calculated or defaulted here. Shown only once the session is running (active/paused), never on
+   the WAITING card. Missing values show a plain fallback, never a guess. */
+function irrigationPanelHtml_(s){
  if(!isIrrigation_(s)||!(s.status==='active'||s.status==='paused'))return '';
  const e=st.irrCtx[s.id],busy=!!st.irrBusy[s.id];
- const reload=`<button class="btn secondary irr-reload" ${busy?'disabled':''} onclick="loadIrrCtx_(st.sessions.find(x=>x.id==='${esc(s.id)}'),true)">${busy?'Loading…':'↻ Reload'}</button>`;
+ const reload=`<button class="btn secondary" style="margin-top:8px;width:auto;padding:6px 14px;" ${busy?'disabled':''} onclick="loadIrrCtx_(st.sessions.find(x=>x.id==='${esc(s.id)}'),true)">${busy?'Loading…':'Reload'}</button>`;
+ const head='<div class="irr-h">💧 Irrigation requirement</div>';
  const na=t=>`<span style="opacity:.7;">${t}</span>`;
- const fallbackLoc=esc(s.bedId)+' · '+esc(s.block);
- const top=irrTopZone_(s,fallbackLoc,completingNow);
- if(!e)return top+`<div class="irr-box"><div class="sub"><span class="spin" style="display:inline-block;vertical-align:-3px;margin-right:6px;"></span>Loading irrigation details…</div></div>`;
- if(!e.data)return top+`<div class="irr-box"><div class="sub">${esc(e.err||'Could not load the irrigation details.')}</div>${reload}</div>`;
+ if(!e)return `<div class="irr-box">${head}<div class="sub"><span class="spin" style="display:inline-block;vertical-align:-3px;margin-right:6px;"></span>Loading irrigation details…</div></div>`;
+ if(!e.data)return `<div class="irr-box">${head}<div class="sub">${esc(e.err||'Could not load the irrigation details.')}</div>${reload}</div>`;
  const d=e.data,c=d.cohort,q=d.requirement||{};
- const topD=irrTopZone_(s,esc(d.bed.bedId)+' · '+esc(d.bed.blockId||s.block||''),completingNow);
- if(!c)return topD+`<div class="irr-box"><div class="sub">${esc(q.message||'No active cohort is assigned to this bed.')}</div>${reload}</div>`;
+ if(!c)return `<div class="irr-box">${head}<div class="sub">${esc(q.message||'No active cohort is assigned to this bed.')}</div>${reload}</div>`;
+ const row=(k,v)=>`<div class="irr-r"><b>${k}:</b> ${v}</div>`;
+ const cropTxt=esc(c.cropName||c.cropId||'')+(c.cropId&&c.cropName?' ('+esc(c.cropId)+')':'');
+ const cohortTxt=esc(c.cohortId||'')+(c.plantingDate?' · planted '+esc(irrFmtDate_(c.plantingDate)):'');
+ const base=row('Bed',esc(d.bed.bedId)+' · '+esc(d.bed.blockId||s.block||''))
+  +row('Crop',cropTxt||na('Not recorded'))
+  +row('Cohort',cohortTxt)
+  +row('Growth stage',c.stage?esc(c.stage):na('Not recorded'));
  const mismatch=c.sessionCohortMismatch?`<div class="sub" style="margin-top:4px;color:var(--warn);">This bed now holds ${esc(c.cohortId)}. Details above are for that cohort.</div>`:'';
  if(q.state!=='SCHEDULED'){
-  return topD+`<div class="irr-box"><div class="sub">${esc(q.message||'')}${q.nextDate?' Next scheduled: '+esc(irrFmtDate_(q.nextDate))+'.':''}</div>${reload}</div>`
-   +mismatch+irrMetaStrip_(s,c);
+  return `<div class="irr-box">${head}${base}<div class="sub" style="margin-top:4px;">${esc(q.message||'')}${q.nextDate?' Next scheduled: '+esc(irrFmtDate_(q.nextDate))+'.':''}</div>${mismatch}${reload}</div>`;
  }
- // ---- Zone 2: the 2x2 field-action grid - exactly the same numbers the old stacked rows showed, just grouped ----
- const stWord=q.dueStatus,when=irrFmtDate_(q.scheduledDate);
- const dueTxt=q.offSchedule?'Not due today (assigned by your manager) · ref. '+when:stWord==='OVERDUE'?'Overdue · was due '+when:q.due?'Due · '+when:'Scheduled · '+when;
+ const when=irrFmtDate_(q.scheduledDate);
+ const dueTxt=q.offSchedule?'Not due today (assigned by your manager) · ref. '+when:q.dueStatus==='OVERDUE'?'Overdue · was due '+when:q.due?'Due · '+when:'Scheduled · '+when;
  const seq=q.of?` <span style="opacity:.7;">(#${q.sequence} of ${q.of})</span>`:'';
- const est=q.estimated?' <span style="opacity:.7;font-size:11px;font-weight:700;">ESTIMATED</span>':'';
- const profileLine='Stage: '+(c.stage?esc(c.stage):na('Not recorded'))
-   +(q.lifecycleStage?' · Profile: '+esc(q.lifecycleStage)+(q.reducedDepth?' · reduced depth (pre-harvest)':q.reducedFrequency?' · reduced frequency (pre-harvest)':''):'');
- const grid=`<div class="irr-box"><div class="irr-box-h"><span>💧 Field action specs</span>${reload}</div><div class="irr-grid">
-   ${irrGridCell_('Zone & Shift',[
-     `<div>${q.zoneId?esc(q.zoneId):na('Not assigned')}</div>`,
-     `<div>${q.shiftWindow?esc(q.shiftWindow):na('Not defined')}</div>`])}
-   ${irrGridCell_('Run Time & Pressure',[
-     `<div>${q.runtime&&q.runtime.minutes!=null?`<b>${esc(q.runtime.minutes)} min</b> <span style="opacity:.7;">(${q.estimated?'ESTIMATED · ':''}whole zone, not this bed alone)</span>`:na('Not calculated')}</div>`,
-     `<div>Pressure: ${q.targetPsi!=null?esc(q.targetPsi)+' psi':na('N/A')}</div>`])}
-   ${irrGridCell_('Water Target',[
-     `<div>${q.targetGallons!=null?`<b>${esc(q.targetGallons)} gal</b>${est}`:na('Not calculated')}</div>`,
-     `<div>${q.targetDepthInches!=null?'Target depth: '+esc(q.targetDepthInches)+' in':na('Not recorded')}</div>`])}
-   ${irrGridCell_('Schedule & Stage',[
-     `<div>${esc(dueTxt)}${seq}</div>`,
-     `<div>${profileLine}</div>`])}
- </div></div>`;
- // ---- Zone 3: fixed field-rules callout + any profile/alert notes, then the compact crop/cohort + assignment strip ----
+ const est=q.estimated?' <span class="irr-est">ESTIMATED</span>':'';
  const notes=[];
  if(q.profile&&q.profile.notes)notes.push(q.profile.notes);
  (q.alerts||[]).forEach(a=>notes.push(a));
- const rules=`<div class="irr-rules"><b>Field rules:</b> Apply the amount shown; do not change the zone or schedule yourself. While watering, watch for leaks, pooling, runoff or abnormal delivery and tell your manager if you see any.`
-   +notes.map(n=>`<div class="sub" style="margin-top:4px;">• ${esc(n)}</div>`).join('')+`</div>`
-   +mismatch
-   +(e.err?`<div class="sub" style="margin-top:4px;color:var(--warn);">${esc(e.err)} Showing the last details loaded.</div>`:'');
- return topD+grid+rules+irrMetaStrip_(s,c);
+ return `<div class="irr-box">${head}${base}
+  ${row('Irrigation',esc(dueTxt)+seq)}
+  ${row('Profile stage',q.lifecycleStage?esc(q.lifecycleStage)+(q.reducedDepth?' · reduced depth (pre-harvest)':q.reducedFrequency?' · reduced frequency (pre-harvest)':''):na('Not recorded'))}
+  ${row('Water requirement',q.targetGallons!=null?`${esc(q.targetGallons)} gal${est}${q.targetDepthInches!=null?' · target depth '+esc(q.targetDepthInches)+' in':''}`:na('Not calculated'))}
+  ${row('Zone run time',q.runtime&&q.runtime.minutes!=null?`${esc(q.runtime.minutes)} min <span style="opacity:.7;">(whole zone, not this bed alone)</span>${est}`:na('Not calculated'))}
+  ${row('Zone',q.zoneId?esc(q.zoneId):na('Not assigned'))}
+  ${row('Shift',q.shiftWindow?esc(q.shiftWindow):na('Not defined'))}
+  ${row('Pressure',q.targetPsi!=null?esc(q.targetPsi)+' psi':na('N/A'))}
+  <div class="irr-r" style="margin-top:6px;"><b>Instructions:</b> Apply the amount shown; do not change the zone or schedule yourself. While watering, watch for leaks, pooling, runoff or abnormal delivery and tell your manager if you see any.</div>
+  ${notes.map(n=>`<div class="irr-r">• ${esc(n)}</div>`).join('')}
+  ${mismatch}${(e.err?`<div class="sub" style="margin-top:4px;color:var(--warn);">${esc(e.err)} Showing the last details loaded.</div>`:'')}${reload}</div>`;
+}
+
+/* ================= ACT_013 IrrigationCheck: "Irrigation check" panel =================
+   One activity, two outcomes chosen by the worker (server: IrrigationZoneTrace.gs, route submit-zone-trace):
+     ROUTINE_INSPECTION  validate delivery; "Anomaly found" is reported as an ordinary worker exception.
+     ZONE_TRACE          the zone the line reached. OBSERVATION ONLY: it never assigns BED_MASTER.Zone or releases the bed.
+                         A manager signs it off under Zone sign-off.
+   Shown only once the session is running (active/paused). The suggested zone (s.layoutZone) is the paper layout zone for the bed,
+   sent by get-my-sessions as Layout_Zone; it only labels one option and is never submitted unless the worker picks it. */
+const IZT_ZONES_=['IRR-Z01','IRR-Z02','IRR-Z03','IRR-Z04','IRR-Z05','IRR-Z06','IRR-Z07'];
+function isIrrCheck_(s){return !!s&&(s.activityId==='ACT_013'||s.activityName==='IrrigationCheck');}
+function iztState_(s){
+ if(!st.izt[s.id])st.izt[s.id]={mode:'ROUTINE_INSPECTION',anomaly:false,notes:'',zone:'',other:'',lineNotes:'',busy:false,msg:'',err:''};
+ return st.izt[s.id];
+}
+function iztSet_(id,k,v){const z=st.izt[id];if(z)z[k]=v;}
+function iztMode_(id,v){
+ const s=st.sessions.find(x=>x.id===id),z=st.izt[id];if(!s||!z)return;
+ z.mode=v;z.err='';z.msg='';
+ if(v==='ZONE_TRACE'&&!z.zone&&s.layoutZone)z.zone=s.layoutZone;
+ render();
+}
+function iztZone_(id,v){const z=st.izt[id];if(!z)return;z.zone=v;z.err='';render();}
+function irrCheckPanelHtml_(s){
+ if(!isIrrCheck_(s)||!(s.status==='active'||s.status==='paused'))return '';
+ const z=iztState_(s),lz=s.layoutZone||'',id=esc(s.id);
+ const modeSel=`<label>What are you recording?</label>
+  <select onchange="iztMode_('${id}',this.value)">
+   <option value="ROUTINE_INSPECTION" ${z.mode==='ROUTINE_INSPECTION'?'selected':''}>Routine Irrigation Inspection</option>
+   <option value="ZONE_TRACE" ${z.mode==='ZONE_TRACE'?'selected':''}>Physical Zone-Trace Verification</option>
+  </select>`;
+ let body='';
+ if(z.mode==='ZONE_TRACE'){
+  const opts=['<option value="">Select zone…</option>']
+   .concat(lz?[`<option value="${esc(lz)}" ${z.zone===lz?'selected':''}>${esc(lz)} (zone for ${esc(s.bedId)})</option>`]
+            :IZT_ZONES_.map(k=>`<option value="${k}" ${z.zone===k?'selected':''}>${k}</option>`))
+   .concat(lz?[`<option value="OTHER" ${z.zone==='OTHER'?'selected':''}>Other zone</option>`]:[]);
+  const other=(lz&&z.zone==='OTHER')?`<label>Other zone the line reached</label>
+   <select onchange="iztSet_('${id}','other',this.value)"><option value="">Select zone…</option>${IZT_ZONES_.filter(k=>k!==lz).map(k=>`<option value="${k}" ${z.other===k?'selected':''}>${k}</option>`).join('')}</select>`:'';
+  body=`<label>Irrigation zone the line reached</label>
+   <select onchange="iztZone_('${id}',this.value)">${opts.join('')}</select>
+   ${lz?`<div class="sub" style="margin-top:6px;">The zone for ${esc(s.bedId)} is ${esc(lz)}. Choose it if the line reaches ${esc(lz)}. Choose Other zone only if the line goes somewhere else.</div>`:''}
+   ${other}
+   <label>Line / emitter notes (optional)</label>
+   <textarea rows="2" maxlength="500" placeholder="e.g. Line runs to emitters at bed 4; ..." oninput="iztSet_('${id}','lineNotes',this.value)">${esc(z.lineNotes)}</textarea>
+   <div class="sub" style="margin-top:6px;">Your answer is saved for a manager to review. It does not assign the zone or release the bed.</div>`;
+ }else{
+  body=`<div class="izt-chk"><input type="checkbox" id="iztA-${id}" ${z.anomaly?'checked':''} onchange="iztSet_('${id}','anomaly',this.checked)"><label for="iztA-${id}" style="margin:0;">Anomaly found (leak, pooling, runoff, low or uneven flow)</label></div>
+   <label>Notes (optional)</label>
+   <textarea rows="2" maxlength="500" oninput="iztSet_('${id}','notes',this.value)">${esc(z.notes)}</textarea>`;
+ }
+ return `<div class="izt-box"><div class="izt-h">🔍 Irrigation check</div>${modeSel}${body}
+  ${z.err?`<div class="sub" style="margin-top:6px;color:var(--warn);font-weight:700;">${esc(z.err)}</div>`:''}
+  ${z.msg?`<div class="izt-sent">${esc(z.msg)}</div>`:''}
+  <button class="btn block" style="margin-top:8px;" ${z.busy?'disabled':''} onclick="iztSubmit_('${id}')">${z.busy?'Sending…':'Submit irrigation check'}</button></div>`;
+}
+async function iztSubmit_(id){
+ const s=st.sessions.find(x=>x.id===id),z=st.izt[id];if(!s||!z||z.busy)return;
+ const payload={sessionId:id,mode:z.mode};
+ if(z.mode==='ZONE_TRACE'){
+  const zone=z.zone==='OTHER'?z.other:z.zone;
+  if(!zone){z.err='Choose the irrigation zone the line reached.';z.msg='';render();return;}
+  payload.observedZone=zone;payload.lineNotes=String(z.lineNotes||'').trim();
+ }else{
+  payload.anomaly={found:!!z.anomaly,notes:String(z.notes||'').trim()};
+ }
+ z.busy=true;z.err='';z.msg='';render();
+ const r=await api('submit-zone-trace',payload);
+ z.busy=false;
+ if(handleAuthError(r))return;
+ if(!r.ok){z.err=friendlyErr_(r,'Could not record that ('+(r.code||'error')+'). Try again.');render();return;}
+ if(z.mode==='ZONE_TRACE'){
+  z.msg='Zone trace sent. It waits for manager sign-off, so the zone is not assigned yet.';
+  z.zone='';z.other='';z.lineNotes='';
+ }else{
+  z.msg=z.anomaly?'Anomaly sent to the manager.':'Irrigation check recorded.';
+  z.anomaly=false;z.notes='';
+ }
+ render();
 }
 function fertLine_(s){const f=s&&s.fert;if(!f)return '';const row=(k,v)=>v===''||v==null?'':`<div class="sub"><b>${k}:</b> ${esc(v)}</div>`;const org=f.organic==='ORGANIC'?'Organic':f.organic==='NON_ORGANIC'?'Non-organic':f.organic;return `<div style="margin-top:6px;padding:6px 8px;border:1px solid #bcd6bf;border-radius:8px;background:#EEF5EE;"><div class="sub" style="font-weight:700;">Fertilizer to apply</div>${row('Type',f.type)}${row('Brand',f.brand)}${row('Quantity',(f.qty!==''?f.qty:'')+(f.unit?' '+f.unit:''))}${row('Organic',org)}${row('Method',f.method)}${row('Notes',f.notes)}</div>`;}
 function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain='';st.bedScan=null;st.bedScanRaw='';st.intakeIn='';st.scanBusy=false;
@@ -1079,11 +1111,7 @@ function renderHome(){
     const assigned=s.status==='assigned';
     const justDone=s.status==='completed';
     const starting=st.pending[s.id]==='starting', completingNow=st.pending[s.id]==='completing';
-    // Running irrigation sessions get the reorganized 4-zone card (irrigationPanelHtml_ now owns the whole top
-    // section, not just the blue requirement box); every other activity, and irrigation while still WAITING/
-    // COMPLETED, keeps the original stacked layout untouched.
-    const irrActive=isIrrigation_(s)&&(s.status==='active'||s.status==='paused');
-    const topSection=irrActive?irrigationPanelHtml_(s,completingNow):`
+    const topSection=`
     <div class="row" style="margin-bottom:6px;"><div>
       <span class="badge ${s.status==='paused'?'paused':''}${justDone?'done':''}">${assigned?(starting?'STARTING':'WAITING'):(completingNow?'COMPLETING':s.status.toUpperCase())}${s.status==='paused'&&s.pauseType?' · '+esc(s.pauseType):''}</span>
       <div style="font-weight:700;margin-top:6px;">${esc(s.bedId)} · ${esc(s.block)}</div>
@@ -1091,6 +1119,7 @@ function renderHome(){
       ${s.description?`<div class="sub">${esc(s.description)}</div>`:''}
       ${dsPrepLine_(s)}
       ${fertLine_(s)}
+      ${irrigationPanelHtml_(s)}${irrCheckPanelHtml_(s)}
       ${s.reassignedFromName?`<div class="sub re">↩ Reassigned from ${esc(s.reassignedFromName)}${s.managerName?' by '+esc(s.managerName):''}</div>`
         :s.managerName?`<div class="sub by">Assigned by ${esc(s.managerName)}</div>`:''}
       ${fmtAssigned_(s.assignedTime)?`<div class="sub dt">Date assigned: ${esc(fmtAssigned_(s.assignedTime))}</div>`:''}</div>
