@@ -108,6 +108,20 @@ select{width:100%;padding:12px;border-radius:var(--radius);border:1.5px solid va
 .irr-box .irr-h{font-weight:700;margin-bottom:3px;}
 .irr-box .irr-r{margin:1px 0;}
 .irr-box .irr-est{opacity:.7;font-size:11px;font-weight:700;}
+.irr-box .irr-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.irr-box .irr-top .irr-h{margin:0;}
+.irr-box .irr-hero{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;margin:6px 0 2px;}
+.irr-box .irr-hero-l{font-size:12px;opacity:.75;font-weight:700;text-transform:uppercase;letter-spacing:.04em;}
+.irr-box .irr-hero-n{font-size:26px;font-weight:800;line-height:1.1;}
+.irr-box .irr-pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:#fff;border:1px solid #b9d3e6;}
+.irr-box .irr-status{font-weight:600;margin:2px 0 6px;}
+.irr-box .irr-check{margin:4px 0 6px;padding-left:18px;}
+.irr-box .irr-check li{margin:2px 0;}
+.irr-box .irr-in-l{display:block;margin-top:8px;font-weight:700;}
+.irr-box .irr-in{width:100%;box-sizing:border-box;margin-top:4px;}
+.irr-box .irr-det{margin-top:8px;}
+.irr-box .irr-det summary{cursor:pointer;font-weight:700;}
+.irr-box .irr-cap{opacity:.7;font-size:12px;}
 .izt-box{margin-top:8px;padding:9px 10px;border:1px solid #d9cdea;border-radius:10px;background:#F5F1FA;font-size:13px;line-height:1.4;}
 .izt-box .izt-h{font-weight:700;margin-bottom:3px;}
 .izt-box label{margin-top:8px;}
@@ -725,21 +739,31 @@ function irrigationPanelHtml_(s){
  const when=irrFmtDate_(q.scheduledDate);
  const dueTxt=q.offSchedule?'Not due today (assigned by your manager) · ref. '+when:q.dueStatus==='OVERDUE'?'Overdue · was due '+when:q.due?'Due · '+when:'Scheduled · '+when;
  const seq=q.of?` <span style="opacity:.7;">(#${q.sequence} of ${q.of})</span>`:'';
- const est=q.estimated?' <span class="irr-est">ESTIMATED</span>':'';
+ const est=q.estimated?'<span class="irr-pill">Estimated</span>':'';
  const notes=[];
  if(q.profile&&q.profile.notes)notes.push(q.profile.notes);
  (q.alerts||[]).forEach(a=>notes.push(a));
- return `<div class="irr-box">${head}${base}
-  ${row('Irrigation',esc(dueTxt)+seq)}
-  ${row('Profile stage',q.lifecycleStage?esc(q.lifecycleStage)+(q.reducedDepth?' · reduced depth (pre-harvest)':q.reducedFrequency?' · reduced frequency (pre-harvest)':''):na('Not recorded'))}
-  ${row('Water requirement',q.targetGallons!=null?`${esc(q.targetGallons)} gal${est}${q.targetDepthInches!=null?' · target depth '+esc(q.targetDepthInches)+' in':''}`:na('Not calculated'))}
-  ${row('Zone run time',q.runtime&&q.runtime.minutes!=null?`${esc(q.runtime.minutes)} min <span style="opacity:.7;">(whole zone, not this bed alone)</span>${est}`:na('Not calculated'))}
-  ${row('Zone',q.zoneId?esc(q.zoneId):na('Not assigned'))}
-  ${row('Shift',q.shiftWindow?esc(q.shiftWindow):na('Not defined'))}
-  ${row('Pressure',q.targetPsi!=null?esc(q.targetPsi)+' psi':na('N/A'))}
-  <div class="irr-r" style="margin-top:6px;"><b>Instructions:</b> Apply the amount shown; do not change the zone or schedule yourself. While watering, watch for leaks, pooling, runoff or abnormal delivery and tell your manager if you see any.</div>
+ const psiTxt=q.targetPsi!=null?esc(q.targetPsi)+' psi':na('Not set');
+ const depthTxt=q.targetDepthInches!=null?esc(q.targetDepthInches)+' in':na('Not set');
+ const stageTxt=q.lifecycleStage?esc(q.lifecycleStage)+(q.reducedDepth?' · reduced depth (pre-harvest)':q.reducedFrequency?' · reduced frequency (pre-harvest)':''):na('Not recorded');
+ const runTxt=q.runtime&&q.runtime.minutes!=null?`${esc(q.runtime.minutes)} min <span class="irr-cap">zone-wide total</span>`:na('Not calculated');
+ const det=row('Bed',esc(d.bed.bedId)+' · '+esc(d.bed.blockId||s.block||''))+row('Crop',cropTxt||na('Not recorded'))+row('Cohort',cohortTxt)+row('Stage',stageTxt)+row('Zone run time',runTxt);
+ const gallonsIn=st.completingId===s.id?'':`<label class="irr-in-l">Gallons applied</label><input class="irr-in" type="number" inputmode="decimal" placeholder="Enter gallons" value="${esc(st.qty)}" oninput="st.qty=this.value">`;
+ return `<div class="irr-box irr-card">
+  <div class="irr-top"><div class="irr-h">💧 Irrigation</div>${reload}</div>
+  <div class="irr-hero"><span class="irr-hero-l">Apply</span><span class="irr-hero-n">${q.targetGallons!=null?esc(q.targetGallons)+' gal':na('Not calculated')}</span>${est}</div>
+  <div class="irr-status">${esc(dueTxt)}${seq}</div>
+  <ul class="irr-check">
+    <li><b>Zone</b> ${q.zoneId?esc(q.zoneId):na('Not assigned')} at ${psiTxt}</li>
+    <li><b>Shift</b> ${q.shiftWindow?esc(q.shiftWindow):na('Not defined')}</li>
+    <li><b>Target depth</b> ${depthTxt}</li>
+    <li>Do not change the zone or schedule yourself. Watch for leaks, pooling, runoff or pressure drops, and tell your manager if you see any.</li>
+  </ul>
   ${notes.map(n=>`<div class="irr-r">• ${esc(n)}</div>`).join('')}
-  ${mismatch}${(e.err?`<div class="sub" style="margin-top:4px;color:var(--warn);">${esc(e.err)} Showing the last details loaded.</div>`:'')}${reload}</div>`;
+  ${gallonsIn}
+  <details class="irr-det"><summary>Details</summary>${det}</details>
+  ${mismatch}${(e.err?`<div class="sub" style="margin-top:4px;color:var(--warn);">${esc(e.err)} Showing the last details loaded.</div>`:'')}
+ </div>`;
 }
 
 /* ================= ACT_013 IrrigationCheck: "Irrigation check" panel =================
@@ -821,7 +845,7 @@ async function iztSubmit_(id){
  render();
 }
 function fertLine_(s){const f=s&&s.fert;if(!f)return '';const row=(k,v)=>v===''||v==null?'':`<div class="sub"><b>${k}:</b> ${esc(v)}</div>`;const org=f.organic==='ORGANIC'?'Organic':f.organic==='NON_ORGANIC'?'Non-organic':f.organic;return `<div style="margin-top:6px;padding:6px 8px;border:1px solid #bcd6bf;border-radius:8px;background:#EEF5EE;"><div class="sub" style="font-weight:700;">Fertilizer to apply</div>${row('Type',f.type)}${row('Brand',f.brand)}${row('Quantity',(f.qty!==''?f.qty:'')+(f.unit?' '+f.unit:''))}${row('Organic',org)}${row('Method',f.method)}${row('Notes',f.notes)}</div>`;}
-function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty='';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain='';st.bedScan=null;st.bedScanRaw='';st.intakeIn='';st.scanBusy=false;
+function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty=isIrrigation_(st.sessions.find(x=>x.id===id)||{})?st.qty:'';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain='';st.bedScan=null;st.bedScanRaw='';st.intakeIn='';st.scanBusy=false;
  const _cs=st.sessions.find(x=>x.id===id)||{};st.scoutNote=null;st.sc={domain:SCOUT_ACT_DOMAIN_UI_[_cs.activityName]||'PlantCondition',severity:'MEDIUM',symptom:'',requiresAction:false,noIssues:false};st.app={product:'',qty:''};render();}
 async function confirmComplete(id){
  const s=st.sessions.find(x=>x.id===id);if(!s||st.pending[id])return;
