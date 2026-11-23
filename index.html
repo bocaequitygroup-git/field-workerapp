@@ -719,7 +719,7 @@ function irrigationPanelHtml_(s){
  if(!isIrrigation_(s)||!(s.status==='active'||s.status==='paused'))return '';
  const e=st.irrCtx[s.id],busy=!!st.irrBusy[s.id];
  const reload=`<button class="btn secondary" style="margin-top:8px;width:auto;padding:6px 14px;" ${busy?'disabled':''} onclick="loadIrrCtx_(st.sessions.find(x=>x.id==='${esc(s.id)}'),true)">${busy?'Loading…':'Reload'}</button>`;
- const head='<div class="irr-h">💧 Irrigation requirement</div>';
+ const head='<div class="irr-h">💧 Irrigation requirement</div>'+irrSafetyPills_(e&&e.data);
  const na=t=>`<span style="opacity:.7;">${t}</span>`;
  if(!e)return `<div class="irr-box">${head}<div class="sub"><span class="spin" style="display:inline-block;vertical-align:-3px;margin-right:6px;"></span>Loading irrigation details…</div></div>`;
  if(!e.data)return `<div class="irr-box">${head}<div class="sub">${esc(e.err||'Could not load the irrigation details.')}</div>${reload}</div>`;
@@ -800,7 +800,8 @@ function irrCheckPanelHtml_(s){
   const opts=['<option value="">Select zone…</option>']
    .concat(lz?[`<option value="${esc(lz)}" ${z.zone===lz?'selected':''}>${esc(lz)} (zone for ${esc(s.bedId)})</option>`]
             :IZT_ZONES_.map(k=>`<option value="${k}" ${z.zone===k?'selected':''}>${k}</option>`))
-   .concat(lz?[`<option value="OTHER" ${z.zone==='OTHER'?'selected':''}>Other zone</option>`]:[]);
+   .concat(lz?[`<option value="OTHER" ${z.zone==='OTHER'?'selected':''}>Other zone</option>`]:[])
+   .concat([`<option value="INCONCLUSIVE" ${z.zone==='INCONCLUSIVE'?'selected':''}>Inconclusive (could not confirm the zone)</option>`]);
   const other=(lz&&z.zone==='OTHER')?`<label>Other zone the line reached</label>
    <select onchange="iztSet_('${id}','other',this.value)"><option value="">Select zone…</option>${IZT_ZONES_.filter(k=>k!==lz).map(k=>`<option value="${k}" ${z.other===k?'selected':''}>${k}</option>`).join('')}</select>`:'';
   body=`<label>Irrigation zone the line reached</label>
@@ -845,19 +846,44 @@ async function iztSubmit_(id){
  render();
 }
 function fertLine_(s){const f=s&&s.fert;if(!f)return '';const row=(k,v)=>v===''||v==null?'':`<div class="sub"><b>${k}:</b> ${esc(v)}</div>`;const org=f.organic==='ORGANIC'?'Organic':f.organic==='NON_ORGANIC'?'Non-organic':f.organic;return `<div style="margin-top:6px;padding:6px 8px;border:1px solid #bcd6bf;border-radius:8px;background:#EEF5EE;"><div class="sub" style="font-weight:700;">Fertilizer to apply</div>${row('Type',f.type)}${row('Brand',f.brand)}${row('Quantity',(f.qty!==''?f.qty:'')+(f.unit?' '+f.unit:''))}${row('Organic',org)}${row('Method',f.method)}${row('Notes',f.notes)}</div>`;}
-function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty=isIrrigation_(st.sessions.find(x=>x.id===id)||{})?st.qty:'';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.isFinal=false;st.grade='';st.coldChain='';st.bedScan=null;st.bedScanRaw='';st.intakeIn='';st.scanBusy=false;
+function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty=isIrrigation_(st.sessions.find(x=>x.id===id)||{})?st.qty:'';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.valveOk=false;st.overrunReason='';st.isFinal=false;st.grade='';st.coldChain='';st.bedScan=null;st.bedScanRaw='';st.intakeIn='';st.scanBusy=false;
  const _cs=st.sessions.find(x=>x.id===id)||{};st.scoutNote=null;st.sc={domain:SCOUT_ACT_DOMAIN_UI_[_cs.activityName]||'PlantCondition',severity:'MEDIUM',symptom:'',requiresAction:false,noIssues:false};st.app={product:'',qty:''};render();}
+/* ================= ACT_031 Irrigation: valve gate, cutoff clock, overrun reason, safety pills (step 3) =================
+   Server fields from get-irrigation-session-context (optional; a missing field shows nothing and never blocks):
+     requirement.cutoffAt  ISO time the worker must be at the bed to shut the water off
+     safety {waterQuality:'CLEAR'|'HOLD', phiDays, openTickets}                                                    */
+function irrCutoffMs_(s){const c=st.irrCtx[s.id],r=c&&c.data&&c.data.requirement;const t=r&&r.cutoffAt?Date.parse(r.cutoffAt):NaN;return isNaN(t)?null:t;}
+function irrOverrun_(s){const t=irrCutoffMs_(s);return t!=null&&Date.now()>t+60000;}
+function irrBlockComplete_(s){if(!isIrrigation_(s))return false;return !st.valveOk||(irrOverrun_(s)&&!String(st.overrunReason||'').trim());}
+function irrSafetyPills_(data){
+ const sf=data&&data.safety;if(!sf)return '';
+ const pill=(t,bg)=>`<span class="irr-pill" style="background:${bg};color:#fff;margin:2px 4px 2px 0;">${t}</span>`;
+ const out=[];
+ if(sf.waterQuality==='HOLD')out.push(pill('Water: HOLD · do not open valve','#B71C1C'));
+ else if(sf.waterQuality==='CLEAR')out.push(pill('Water: CLEAR','#2E7D32'));
+ if(Number(sf.phiDays)>0)out.push(pill('Pre-harvest dry-down: '+Number(sf.phiDays)+' d','#8A6D00'));
+ if(Number(sf.openTickets)>0)out.push(pill('Open maintenance: '+Number(sf.openTickets),'#B71C1C'));
+ return out.length?`<div style="margin:4px 0 6px;">${out.join('')}</div>`:'';
+}
+function irrGateHtml_(s){
+ const id=esc(s.id),t=irrCutoffMs_(s),over=irrOverrun_(s);
+ const cut=t!=null?`<div class="irr-r"><b>Shut off by:</b> ${esc(new Date(t).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}))} at the bed</div>`:'';
+ const ov=over?`<div class="banner">Running past the cutoff. Enter why before finishing.</div><label>Overrun reason (required)</label><input type="text" maxlength="300" value="${esc(st.overrunReason||'')}" oninput="st.overrunReason=this.value">`:'';
+ return `<div class="irr-box">${cut}<div class="chk"><input type="checkbox" id="valveChk-${id}" ${st.valveOk?'checked':''} onchange="st.valveOk=this.checked;render()"><label for="valveChk-${id}" style="margin:0;">I closed this bed's manual lateral ball valve.</label></div>${ov}</div>`;
+}
 async function confirmComplete(id){
  const s=st.sessions.find(x=>x.id===id);if(!s||st.pending[id])return;
  if(s.activityId==='ACT_018'&&!(Number(st.qty)>0)){st.cardErr[id]='Enter how much was harvested before finishing.';render();return;}
  if((s.activityId==='ACT_031'||s.activityName==='Irrigation')&&!(Number(st.qty)>0)){st.cardErr[id]='Enter the gallons applied before finishing.';render();return;}
+ if(isIrrigation_(s)&&!st.valveOk){st.cardErr[id]='Confirm that you closed the lateral valve before finishing.';render();return;}
+ if(isIrrigation_(s)&&irrOverrun_(s)&&!String(st.overrunReason||'').trim()){st.cardErr[id]='Enter the overrun reason before finishing.';render();return;}
  if(s.activityId==='ACT_018'&&st.coldChain!=='yes'&&st.coldChain!=='no'){st.cardErr[id]='Answer the cold-chain question (Yes or No) before finishing.';render();return;}
  if(s.activityId==='ACT_018'&&st.bedScan&&!st.bedScan.ok){st.cardErr[id]=st.bedScan.msg;render();return;}
  const kind=completionKind_(s);
  if(kind==='SCOUT'&&!st.sc.noIssues&&!String(st.sc.symptom||'').trim()){st.cardErr[id]='Describe what you saw, or tick "No issues found on this walk".';render();return;}
  if(kind==='CONTROL'&&(!String(st.app.product||'').trim()||!String(st.app.qty||'').trim())){st.cardErr[id]='Enter the product and the quantity applied before finishing.';render();return;}
  st.pending[id]='completing';delete st.cardErr[id];st.err=null;st.lastChange=Date.now();render();
- let r=await api('end-activity',{sessionId:id,scoutFinding:kind==='SCOUT'?{domain:st.sc.domain,severity:st.sc.severity,symptom:st.sc.symptom,requiresAction:!!st.sc.requiresAction,noIssues:!!st.sc.noIssues,photo:st.sc.photo?st.sc.photo.dataUrl:undefined}:undefined,applicationProduct:kind==='CONTROL'?String(st.app.product||'').trim():undefined,applicationQuantity:kind==='CONTROL'?String(st.app.qty||'').trim():undefined,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?(st.coldChain==='yes'?true:st.coldChain==='no'?false:undefined):undefined,scannedBed:s.activityId==='ACT_018'?((st.bedScan?st.bedScan.raw:(st.bedScanRaw||'').trim())||undefined):undefined,intakeLotId:s.activityId==='ACT_018'?((st.intakeIn||'').trim()||undefined):undefined});
+ let r=await api('end-activity',{sessionId:id,valveClosed:isIrrigation_(s)?!!st.valveOk:undefined,overrunReason:(isIrrigation_(s)&&irrOverrun_(s))?String(st.overrunReason||'').trim():undefined,scoutFinding:kind==='SCOUT'?{domain:st.sc.domain,severity:st.sc.severity,symptom:st.sc.symptom,requiresAction:!!st.sc.requiresAction,noIssues:!!st.sc.noIssues,photo:st.sc.photo?st.sc.photo.dataUrl:undefined}:undefined,applicationProduct:kind==='CONTROL'?String(st.app.product||'').trim():undefined,applicationQuantity:kind==='CONTROL'?String(st.app.qty||'').trim():undefined,quantity:st.qty,unit:st.unit,notes:st.notes,isFinalHarvest:!!st.isFinal,grade:st.grade||'',coldChainCompliant:s.activityId==='ACT_018'?(st.coldChain==='yes'?true:st.coldChain==='no'?false:undefined):undefined,scannedBed:s.activityId==='ACT_018'?((st.bedScan?st.bedScan.raw:(st.bedScanRaw||'').trim())||undefined):undefined,intakeLotId:s.activityId==='ACT_018'?((st.intakeIn||'').trim()||undefined):undefined});
  if(handleAuthError(r)){delete st.pending[id];return;}
  // A lost reply, or "not active" because the first tap already closed it: ask the server before calling it a failure.
  if(isTransient_(r)||(!r.ok&&r.code==='SESSION_NOT_ACTIVE')){if(await sessionIsClosed_(id))r={ok:true};}
@@ -1161,10 +1187,11 @@ function renderHome(){
       ${s.activityId==='ACT_018'?bedScanHtml_(s):''}
       ${s.activityId==='ACT_018'?`<div class="chk"><input type="checkbox" id="finalChk" ${st.isFinal?'checked':''} onchange="st.isFinal=this.checked"><label for="finalChk" style="margin:0;">Final harvest for this cohort</label></div>`:''}
       ${completionFormHtml_(s)}
+      ${isIrrigation_(s)?irrGateHtml_(s):''}
       <label style="margin-top:8px;">Notes (optional)</label><input type="text" value="${esc(st.notes)}" oninput="st.notes=this.value">
       <div class="row">
         <button class="btn secondary" onclick="st.completingId=null;render()">Cancel</button>
-        <button class="btn warn" onclick="confirmComplete('${s.id}')">Confirm Complete</button>
+        <button class="btn warn" ${irrBlockComplete_(s)?'disabled':''} onclick="confirmComplete('${s.id}')">Confirm Complete</button>
       </div>`:pausing?`
       <label style="margin-top:8px;">Pause type</label>
       <div class="row" style="flex-wrap:wrap;gap:6px;">
