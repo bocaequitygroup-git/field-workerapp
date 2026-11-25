@@ -1501,6 +1501,12 @@ function phLabelOverlay() {
 }
 function phScan_() { const el = phq('#ph-scan'); PHW.scan = phNorm(el ? el.value : ''); phPaint(); const w = phq('[data-k=receivedWeight]'); if (w) w.focus(); }
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'ph-scan') { e.preventDefault(); phScan_(); } });
+document.addEventListener('click', e => {
+  if (!st.menuOpen) return;
+  if (e.target.closest('.menu-pop') || e.target.closest('.menu-btn')) return;
+  st.menuOpen = false; render();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && st.menuOpen) { st.menuOpen = false; render(); } });
 document.addEventListener('click', async e => {
   const t = e.target.closest('[data-ph]'); if (!t || !phOK_()) return;
   const a = t.dataset.ph, form = t.closest('[data-form]');
