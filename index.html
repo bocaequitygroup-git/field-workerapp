@@ -32,7 +32,7 @@ input[type=text],input[type=password],input[type=number]{width:100%;padding:13px
 .center{text-align:center;}
 .timer{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;}
 .row{display:flex;gap:8px;margin-top:8px;}
-.row>*{flex:1;}
+.row>*{flex:1;}.row>.timer{flex:none;}
 .bed-row{display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid var(--border);cursor:pointer;}
 .bed-row:last-child{border-bottom:none;}
 .bed-id{font-weight:700;}
@@ -125,6 +125,71 @@ select{width:100%;padding:12px;border-radius:var(--radius);border:1.5px solid va
 .izt-box{margin-top:8px;padding:9px 10px;border:1px solid #d9cdea;border-radius:10px;background:#F5F1FA;font-size:13px;line-height:1.4;}
 .izt-box .izt-h{font-weight:700;margin-bottom:3px;}
 .izt-box label{margin-top:8px;}
+/* ===== Redesign: app bar, tabs, irrigation card, record card ===== */
+:root{--info-bg:#eaf3fb;--info-bd:#b9d3e6;--info-tx:#1d4e7a;--amber-bg:#fff4d6;--amber-bd:#f1d58a;--amber-tx:#8a5a00;--late-bg:#fdf0d5;--late-tx:#b3261e;--ok-bg:#e6f2e8;--bar:#14452a;--off:#c9c9c4;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--info-bg:#1b2b38;--info-bd:#2f4a60;--info-tx:#9cc7ea;--amber-bg:#3a3118;--amber-bd:#6b5a22;--amber-tx:#f0c968;--late-bg:#3a3118;--late-tx:#ff9b8f;--ok-bg:#1f3324;--bar:#0f2e1c;--off:#4a4d44;}}
+:root[data-theme="dark"]{--info-bg:#1b2b38;--info-bd:#2f4a60;--info-tx:#9cc7ea;--amber-bg:#3a3118;--amber-bd:#6b5a22;--amber-tx:#f0c968;--late-bg:#3a3118;--late-tx:#ff9b8f;--ok-bg:#1f3324;--bar:#0f2e1c;--off:#4a4d44;}
+.appbar{background:var(--bar);color:#fff;margin:-14px -16px 12px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;position:relative;}
+.appbar .brand{display:flex;align-items:center;gap:12px;min-width:0;}
+.appbar .logo{font-size:30px;line-height:1;}
+.appbar .bt{font-weight:800;font-size:19px;line-height:1.1;}
+.appbar .bn{font-size:14px;opacity:.9;}
+.appbar .ab-right{display:flex;align-items:center;gap:10px;}
+.appbar .conn-pill{margin:0;background:rgba(255,255,255,.14);color:#fff;font-size:13px;padding:7px 12px;}
+.appbar .conn-pill .dot{background:#4ade80;width:9px;height:9px;}
+.appbar .conn-pill.off .dot{background:#ffb199;}
+.menu-btn{background:transparent;border:none;color:#fff;font-size:28px;line-height:1;padding:2px 6px;cursor:pointer;}
+.menu-pop{position:absolute;right:12px;top:calc(100% - 4px);z-index:20;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:12px;min-width:200px;box-shadow:0 6px 20px rgba(0,0,0,.2);}
+.menu-pop .clock{text-align:left;margin-bottom:10px;}
+.menu-pop .clock .d{font-size:12px;}
+.menu-pop .role{color:var(--sub);font-size:12px;margin-bottom:8px;}
+.tabs{background:var(--card);border:1px solid var(--border);}
+.tab{display:flex;align-items:center;justify-content:center;gap:6px;}
+.tab.on{background:var(--accent-d);color:#fff;}
+.tab .ti{font-size:15px;}
+.timer{font-size:36px;font-weight:800;line-height:1;}
+.irr-card2{margin-top:10px;}
+.irr-est{display:flex;align-items:center;gap:12px;background:var(--info-bg);border:1px solid var(--info-bd);border-radius:12px;padding:12px;}
+.irr-est .drop{font-size:30px;}
+.irr-est .body{flex:1;min-width:0;border-left:1.5px solid var(--info-bd);padding-left:12px;}
+.irr-est .t{font-weight:800;font-size:17px;}
+.irr-est .n{font-weight:800;font-size:30px;line-height:1.1;}
+.irr-est .c{font-size:12px;font-style:italic;opacity:.85;}
+.irr-est .btn{padding:6px 12px;font-size:13px;margin:0;width:auto;align-self:flex-start;}
+.irr-stats{display:grid;grid-template-columns:.8fr 1fr 1.35fr 1fr;margin:12px 0 8px;}
+.irr-stats>div{padding:0 8px;border-left:1.5px solid var(--border);min-width:0;}
+.irr-stats>div:first-child{padding-left:0;border-left:none;}
+.irr-stats .k{font-size:13px;color:var(--sub);}
+.irr-stats .v{font-size:14px;font-weight:800;overflow-wrap:anywhere;}
+.irr-al{display:flex;gap:10px;align-items:center;border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px;line-height:1.35;border:1px solid transparent;}
+.irr-al .ic{font-size:20px;flex:none;}
+.irr-al.late{background:var(--late-bg);border-color:var(--amber-bd);color:var(--late-tx);font-weight:800;font-size:16px;}
+.irr-al.ok{background:var(--ok-bg);border-color:var(--border);font-weight:700;}
+.irr-al.info{background:var(--info-bg);border-color:var(--info-bd);color:var(--info-tx);}
+.irr-al.info b{color:var(--info-tx);}
+.irr-al.amber{background:var(--amber-bg);border-color:var(--amber-bd);color:var(--amber-tx);}
+.irr-al.amber .h{font-weight:800;font-size:16px;color:var(--text);}
+.irr-al.amber .h span{font-weight:800;}
+.irr-det2{margin-top:10px;border:1px solid var(--border);border-radius:12px;overflow:hidden;}
+.irr-det2>summary{cursor:pointer;font-weight:800;font-size:17px;padding:10px 12px;display:flex;align-items:center;gap:8px;color:var(--accent);list-style:none;}
+.irr-det2>summary::-webkit-details-marker{display:none;}
+.irr-det2>summary::after{content:"\2304";margin-left:auto;color:var(--text);font-size:18px;}
+.irr-det2[open]>summary::after{transform:rotate(180deg);}
+.irr-det2 .in{padding:4px 12px 12px;border-top:1px solid var(--border);display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;font-size:14px;}
+.irr-det2 .in .big{font-weight:800;font-size:17px;}
+.irr-det2 .in .full{grid-column:1/-1;}
+.irr-pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:#fff;border:1px solid #b9d3e6;color:#1c1e1a;}
+.rec-card{border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-top:12px;background:var(--card);}
+.rec-h{font-weight:800;font-size:19px;color:var(--accent);margin-bottom:8px;}
+.valve-box{margin-top:10px;padding:12px;border:2px solid var(--accent);border-radius:var(--radius);background:var(--card);}
+.valve-box .chk{margin-top:0;font-size:16px;font-weight:600;}
+.valve-box .chk input{width:22px;height:22px;flex:none;accent-color:var(--accent);}
+.valve-box .banner{margin-top:10px;}
+.btn.conf{background:var(--accent);}
+.btn.conf[disabled]{background:var(--off);color:#fff;opacity:1;}
+.btn.secondary{border-width:2px;}
+.dis-hint{font-size:13px;color:var(--sub);margin-top:6px;text-align:right;}
+
 .izt-box .izt-chk{display:flex;align-items:flex-start;gap:8px;margin-top:8px;}
 .izt-box .izt-chk input{margin-top:3px;flex:none;}
 .izt-box textarea{width:100%;box-sizing:border-box;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;}
@@ -747,21 +812,25 @@ function irrigationPanelHtml_(s){
  const depthTxt=q.targetDepthInches!=null?esc(q.targetDepthInches)+' in':na('Not set');
  const stageTxt=q.lifecycleStage?esc(q.lifecycleStage)+(q.reducedDepth?' · reduced depth (pre-harvest)':q.reducedFrequency?' · reduced frequency (pre-harvest)':''):na('Not recorded');
  const runTxt=q.runtime&&q.runtime.minutes!=null?`${esc(q.runtime.minutes)} min <span class="irr-cap">zone-wide total</span>`:na('Not calculated');
- const det=row('Bed',esc(d.bed.bedId)+' · '+esc(d.bed.blockId||s.block||''))+row('Crop',cropTxt||na('Not recorded'))+row('Cohort',cohortTxt)+row('Stage',stageTxt)+row('Zone run time',runTxt);
- const gallonsIn=st.completingId===s.id?'':`<label class="irr-in-l">Gallons applied</label><input class="irr-in" type="number" inputmode="decimal" placeholder="Enter gallons" value="${esc(st.qty)}" oninput="st.qty=this.value">`;
- return `<div class="irr-box irr-card">
-  <div class="irr-top"><div class="irr-h">💧 Irrigation</div>${reload}</div>
-  <div class="irr-hero"><span class="irr-hero-l">Apply</span><span class="irr-hero-n">${q.targetGallons!=null?esc(q.targetGallons)+' gal':na('Not calculated')}</span>${est}</div>
-  <div class="irr-status">${esc(dueTxt)}${seq}</div>
-  <ul class="irr-check">
-    <li><b>Zone</b> ${q.zoneId?esc(q.zoneId):na('Not assigned')} at ${psiTxt}</li>
-    <li><b>Shift</b> ${q.shiftWindow?esc(q.shiftWindow):na('Not defined')}</li>
-    <li><b>Target depth</b> ${depthTxt}</li>
-    <li>Do not change the zone or schedule yourself. Watch for leaks, pooling, runoff or pressure drops, and tell your manager if you see any.</li>
-  </ul>
-  ${notes.map(n=>`<div class="irr-r">• ${esc(n)}</div>`).join('')}
+ const shiftTxt=q.shiftWindow?esc(String(q.shiftWindow).replace(/^(\S+)\s*\((.+)\)\s*$/,'$1 \u00b7 $2')):na('Not defined');
+ const detBig=v=>`<span class="big">${v}</span>`;
+ const det=`<div class="full">${detBig(cropTxt||na('Not recorded'))}</div><div class="full sub">${cohortTxt}</div><div>${stageTxt}</div><div>Bed ${esc(d.bed.bedId)} \u00b7 ${esc(d.bed.blockId||s.block||'')}</div><div class="full"><b>Zone runtime:</b> ${runTxt}</div>`;
+ const gallonsIn=st.completingId===s.id?'':`<label class="irr-in-l" style="margin-top:12px;">Gallons applied</label><input class="irr-in" type="number" inputmode="decimal" placeholder="Enter gallons" value="${esc(st.qty)}" oninput="st.qty=this.value">`;
+ const lateCls=(q.dueStatus==='OVERDUE')?'late':(q.offSchedule?'amber':'ok');
+ const lateIc=lateCls==='late'?'\u26a0\ufe0f':(lateCls==='amber'?'\u2139\ufe0f':'\u2705');
+ const hasG=q.targetGallons!=null;
+ const hero=hasG?`<div class="t">${q.estimated?'Estimated water:':'Apply:'}</div><div class="n">${esc(q.targetGallons)} gal</div>${q.estimated?'<div class="c">Estimate from bed size and crop need, not a verified target</div>':''}`:`<div class="t">Apply:</div><div class="n" style="font-size:20px;">${na('Not calculated')}</div>`;
+ const perBed=hasG?(q.estimated?`<div class="irr-al amber"><span class="ic">\u2757</span><div><div class="h">Per-bed target: <span>Not verified</span></div>Ask your manager before using a gallon target.</div></div>`:`<div class="irr-al ok"><span class="ic">\u2705</span><div><b>Per-bed target: Verified</b></div></div>`):'';
+ return `<div class="irr-card2">
+  <div class="irr-est"><span class="drop">\ud83d\udca7</span><div class="body">${hero}</div>${reload}</div>
+  ${irrSafetyPills_(e&&e.data)}
+  <div class="irr-stats"><div><div class="k">Zone</div><div class="v">${q.zoneId?esc(q.zoneId):na('Not assigned')}</div></div><div><div class="k">Pressure</div><div class="v">${q.targetPsi!=null?esc(q.targetPsi)+' PSI':na('Not set')}</div></div><div><div class="k">Shift</div><div class="v">${shiftTxt}</div></div><div><div class="k">Target Depth</div><div class="v">${depthTxt}</div></div></div>
+  <div class="irr-al ${lateCls}"><span class="ic">${lateIc}</span><div>${esc(dueTxt)}${seq}</div></div>
+  <div class="irr-al info"><span class="ic">\u2139\ufe0f</span><div>Do not change the zone or schedule yourself. <b>Watch for leaks, pooling,</b> runoff or pressure drops, and tell your manager if you see any.</div></div>
+  ${perBed}
+  ${notes.map(n=>`<div class="irr-r sub" style="margin-top:6px;">\u2022 ${esc(n)}</div>`).join('')}
   ${gallonsIn}
-  <details class="irr-det"><summary>Details</summary>${det}</details>
+  <details class="irr-det2" open><summary>\ud83c\udf43 Bed &amp; crop details</summary><div class="in">${det}</div></details>
   ${mismatch}${(e.err?`<div class="sub" style="margin-top:4px;color:var(--warn);">${esc(e.err)} Showing the last details loaded.</div>`:'')}
  </div>`;
 }
@@ -869,7 +938,7 @@ function irrGateHtml_(s){
  const id=esc(s.id),t=irrCutoffMs_(s),over=irrOverrun_(s);
  const cut=t!=null?`<div class="irr-r"><b>Shut off by:</b> ${esc(new Date(t).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}))} at the bed</div>`:'';
  const ov=over?`<div class="banner">Running past the cutoff. Enter why before finishing.</div><label>Overrun reason (required)</label><input type="text" maxlength="300" value="${esc(st.overrunReason||'')}" oninput="st.overrunReason=this.value">`:'';
- return `<div class="irr-box">${cut}<div class="chk"><input type="checkbox" id="valveChk-${id}" ${st.valveOk?'checked':''} onchange="st.valveOk=this.checked;render()"><label for="valveChk-${id}" style="margin:0;">I closed this bed's manual lateral ball valve.</label></div>${ov}</div>`;
+ return `<div class="valve-box">${cut}<div class="chk"><input type="checkbox" id="valveChk-${id}" ${st.valveOk?'checked':''} onchange="st.valveOk=this.checked;render()"><label for="valveChk-${id}" style="margin:0;color:var(--text);font-size:16px;">I closed this bed's manual lateral ball valve</label></div>${ov}</div>`;
 }
 async function confirmComplete(id){
  const s=st.sessions.find(x=>x.id===id);if(!s||st.pending[id])return;
@@ -1016,9 +1085,9 @@ function connPill(){
 }
 function header(){
  if(!st.me)return'';
- return `<div class="statusrow">${connPill()}<div class="clock"><div class="t" data-clock="t">${clockT_()}</div><div class="d" data-clock="d">${clockD_()}</div></div></div>
- <div class="topbar"><div><div class="name">${esc(st.me.name)}</div><div class="role">${esc(st.me.role)}</div></div>
- <button class="btn secondary" onclick="doLogout()">Log Out</button></div>`;
+ const menu=st.menuOpen?`<div class="menu-pop"><div class="clock"><div class="t" data-clock="t">${clockT_()}</div><div class="d" data-clock="d">${clockD_()}</div></div><div class="role">${esc(st.me.name)} · ${esc(st.me.role)}</div><button class="btn secondary block" onclick="st.menuOpen=false;doLogout()">Log Out</button></div>`:'';
+ return `<div class="appbar"><div class="brand"><span class="logo">🌿</span><div><div class="bt">VPOS Worker</div><div class="bn">${esc(st.me.name)}</div></div></div>
+ <div class="ab-right">${connPill()}<button class="menu-btn" aria-label="Menu" onclick="st.menuOpen=!st.menuOpen;render()">☰</button></div>${menu}</div>`;
 }
 function errBanner(){return st.err?`<div class="banner">${esc(st.err)}</div>`:'';}
 
@@ -1051,8 +1120,8 @@ setInterval(tickClock_,1000);
 function tabsHtml_(active){
  const n=st.sessions.filter(s=>s.status==='completed'&&st.flash[s.id]!=='completed').length;
  return `<div class="tabs">
-  <div class="tab ${active==='home'?'on':''}" onclick="go('home')">Sessions</div>
-  <div class="tab ${active==='log'?'on':''}" onclick="go('log');syncActiveSessions_(true)">Log${n?' ('+n+')':''}</div>${phOK_()?`<div class="tab ${active==='packhouse'?'on':''}" onclick="go('packhouse')">Packhouse</div>`:''}</div>`;
+  <div class="tab ${active==='home'?'on':''}" onclick="go('home')"><span class="ti">🌱</span>Sessions</div>
+  <div class="tab ${active==='log'?'on':''}" onclick="go('log');syncActiveSessions_(true)"><span class="ti">📄</span>Log${n?' ('+n+')':''}</div>${phOK_()?`<div class="tab ${active==='packhouse'?'on':''}" onclick="go('packhouse')"><span class="ti">📦</span>Packhouse</div>`:''}</div>`;
 }
 
 /* ---- Log tab: completed tasks, filtered ---- */
@@ -1162,18 +1231,18 @@ function renderHome(){
     const justDone=s.status==='completed';
     const starting=st.pending[s.id]==='starting', completingNow=st.pending[s.id]==='completing';
     const topSection=`
-    <div class="row" style="margin-bottom:6px;"><div>
-      <span class="badge ${s.status==='paused'?'paused':''}${justDone?'done':''}">${assigned?(starting?'STARTING':'WAITING'):(completingNow?'COMPLETING':s.status.toUpperCase())}${s.status==='paused'&&s.pauseType?' · '+esc(s.pauseType):''}</span>
-      <div style="font-weight:700;margin-top:6px;">${esc(s.bedId)} · ${esc(s.block)}</div>
+    <div class="row" style="margin-bottom:6px;"><div style="min-width:0;">
+      <span class="badge ${s.status==='paused'?'paused':''}${justDone?'done':''}">${(!assigned&&!completingNow&&s.status==='active')?'▶ ':''}${assigned?(starting?'STARTING':'WAITING'):(completingNow?'COMPLETING':s.status.toUpperCase())}${s.status==='paused'&&s.pauseType?' · '+esc(s.pauseType):''}</span>
+      <div style="font-weight:800;font-size:20px;margin-top:8px;">${esc(s.bedId)} · ${esc(s.block)}</div>
       <div class="sub">${esc(actLine_(s))}</div>
-      ${s.description?`<div class="sub">${esc(s.description)}</div>`:''}
+      ${s.description?`<div class="sub">${esc(s.description)}</div>`:''}</div>
+      <div class="timer" id="timer-${s.id}" style="text-align:right;flex:none;">${assigned?'Not started':fmt(elapsed(s))}</div></div>
       ${dsPrepLine_(s)}
       ${fertLine_(s)}
       ${irrigationPanelHtml_(s)}${irrCheckPanelHtml_(s)}
-      ${s.reassignedFromName?`<div class="sub re">↩ Reassigned from ${esc(s.reassignedFromName)}${s.managerName?' by '+esc(s.managerName):''}</div>`
-        :s.managerName?`<div class="sub by">Assigned by ${esc(s.managerName)}</div>`:''}
-      ${fmtAssigned_(s.assignedTime)?`<div class="sub dt">Date assigned: ${esc(fmtAssigned_(s.assignedTime))}</div>`:''}</div>
-      <div class="timer" id="timer-${s.id}" style="text-align:right;">${assigned?'Not started':fmt(elapsed(s))}</div></div>`;
+      ${s.reassignedFromName?`<div class="sub re" style="margin-top:8px;">↩ Reassigned from ${esc(s.reassignedFromName)}${s.managerName?' by '+esc(s.managerName):''}</div>`
+        :s.managerName?`<div class="sub by" style="margin-top:8px;">Assigned by ${esc(s.managerName)}</div>`:''}
+      ${fmtAssigned_(s.assignedTime)?`<div class="sub dt">Date assigned: ${esc(fmtAssigned_(s.assignedTime))}</div>`:''}`;
     return `<div class="card">
     ${topSection}
     ${st.cardErr[s.id]?`<div class="banner">${esc(st.cardErr[s.id])}</div>`:''}
@@ -1181,18 +1250,21 @@ function renderHome(){
       <div class="progress"><span class="spin"></span>Starting…</div>`:`
       ${startScanHtml_(s)}`):completingNow?`
       <div class="progress"><span class="spin"></span>Completing…</div>`:completing?`
-      <div class="sub" style="font-weight:700;margin:2px 0 6px;">Mark ${esc(s.activityName)} on ${esc(s.bedId)} as complete?</div>
+      ${isIrrigation_(s)?'':`<div class="sub" style="font-weight:700;margin:2px 0 6px;">Mark ${esc(s.activityName)} on ${esc(s.bedId)} as complete?</div>`}
+      ${isIrrigation_(s)?'<div class="rec-card"><div class="rec-h">\u270f\ufe0f Record this irrigation</div>':''}
       ${s.isFertilizer?(s.fert?'':`<div class="sub" style="margin:4px 0 6px;">The manager has not entered the fertilizer details for this task. You can still complete it; the manager will be notified.</div>`):(s.qtyBased?`<label>${isIrrigation_(s)?'Gallons applied (gal)':'Quantity ('+esc(s.unit)+')'}</label><input type="number" value="${esc(st.qty)}" oninput="st.qty=this.value">`:'')}
       ${s.activityId==='ACT_018'?`<label style="margin-top:8px;">Grade</label><select onchange="st.grade=this.value"><option value="" ${!st.grade?'selected':''}>Not graded</option>${((s.grades&&s.grades.length)?s.grades:['A','B','C','Cull']).map(g=>`<option value="${esc(g)}" ${st.grade===g?'selected':''}>${esc(g)}</option>`).join('')}</select><label style="margin-top:8px;">Cold chain kept (cool and shaded)?</label><select id="ccSel" onchange="st.coldChain=this.value"><option value="" ${!st.coldChain?'selected':''}>Choose Yes or No</option><option value="yes" ${st.coldChain==='yes'?'selected':''}>Yes</option><option value="no" ${st.coldChain==='no'?'selected':''}>No</option></select>`:''}
       ${s.activityId==='ACT_018'?bedScanHtml_(s):''}
       ${s.activityId==='ACT_018'?`<div class="chk"><input type="checkbox" id="finalChk" ${st.isFinal?'checked':''} onchange="st.isFinal=this.checked"><label for="finalChk" style="margin:0;">Final harvest for this cohort</label></div>`:''}
       ${completionFormHtml_(s)}
       ${isIrrigation_(s)?irrGateHtml_(s):''}
-      <label style="margin-top:8px;">Notes (optional)</label><input type="text" value="${esc(st.notes)}" oninput="st.notes=this.value">
+      <label style="margin-top:10px;">Notes (optional)</label><input type="text" value="${esc(st.notes)}" oninput="st.notes=this.value">
+      ${isIrrigation_(s)?'</div>':''}
       <div class="row">
         <button class="btn secondary" onclick="st.completingId=null;render()">Cancel</button>
-        <button class="btn warn" ${irrBlockComplete_(s)?'disabled':''} onclick="confirmComplete('${s.id}')">Confirm Complete</button>
-      </div>`:pausing?`
+        <button class="btn ${isIrrigation_(s)?'conf':'warn'}" ${irrBlockComplete_(s)?'disabled':''} onclick="confirmComplete('${s.id}')">${isIrrigation_(s)?'Confirm complete':'Confirm Complete'}</button>
+      </div>
+      ${irrBlockComplete_(s)?`<div class="dis-hint">${!st.valveOk?'Tick the valve box to finish.':'Enter the overrun reason to finish.'}</div>`:''}`:pausing?`
       <label style="margin-top:8px;">Pause type</label>
       <div class="row" style="flex-wrap:wrap;gap:6px;">
         ${PAUSE_TYPES.map(t=>`<button class="btn secondary" style="flex:none;${st.pauseReason===t?'font-weight:700;text-decoration:underline;':''}" onclick="st.pauseReason='${t}';render()">${esc(t)}</button>`).join('')}
