@@ -730,6 +730,18 @@ function localUpdate(id,patch){
 }
 /** Opens the pause-type picker for a session (Pause button no longer pauses immediately -
  *  a pause type (Break/Lunch/End of Day) must be selected and logged, per spec). */
+async function stopTask(id){
+ if(st.busy)return;
+ if(!confirm('Stop this task now? It ends the task and the timer. Gallons are recorded only if you enter them. Continue?'))return;
+ st.busy=true;st.err=null;render();
+ let r=await api('stop-activity',{sessionId:id});
+ if(isTransient_(r)){const rows=await mySessionRows_();const row=rows&&rows.find(x=>x.Session_ID===id);if(row&&String(row.Status||'').toUpperCase()==='COMPLETED')r={ok:true};}
+ st.busy=false;
+ if(handleAuthError(r))return;
+ if(!r.ok){st.err=friendlyErr_(r,('Could not stop that task ('+(r.code||'error')+').'));render();return;}
+ localUpdate(id,{status:'completed',endTime:Date.now()});
+ render();
+}
 function openPause(id){st.pausingId=id;st.pauseReason='';st.pauseCustom='';st.err=null;render();}
 function cancelPause(){st.pausingId=null;render();}
 async function confirmPause(id){
@@ -811,23 +823,21 @@ function irrigationPanelHtml_(s){
  const psiTxt=q.targetPsi!=null?esc(q.targetPsi)+' psi':na('Not set');
  const depthTxt=q.targetDepthInches!=null?esc(q.targetDepthInches)+' in':na('Not set');
  const stageTxt=q.lifecycleStage?esc(q.lifecycleStage)+(q.reducedDepth?' · reduced depth (pre-harvest)':q.reducedFrequency?' · reduced frequency (pre-harvest)':''):na('Not recorded');
- const runTxt=(pzVerified&&opsOk&&q.runtime&&q.runtime.minutes!=null)?`${esc(q.runtime.minutes)} min <span class="irr-cap">zone-wide total</span>`:na('Not calculated');
+ const runTxt=q.runtime&&q.runtime.minutes!=null?`${esc(q.runtime.minutes)} min <span class="irr-cap">zone-wide total</span>`:na('Not calculated');
  const shiftTxt=q.shiftWindow?esc(String(q.shiftWindow).replace(/^(\S+)\s*\((.+)\)\s*$/,'$1 \u00b7 $2')):na('Not defined');
  const detBig=v=>`<span class="big">${v}</span>`;
  const det=`<div class="full">${detBig(cropTxt||na('Not recorded'))}</div><div class="full sub">${cohortTxt}</div><div>${stageTxt}</div><div>Bed ${esc(d.bed.bedId)} \u00b7 ${esc(d.bed.blockId||s.block||'')}</div><div class="full"><b>Zone runtime:</b> ${runTxt}</div>`;
  const gallonsIn=st.completingId===s.id?'':`<label class="irr-in-l" style="margin-top:12px;">Gallons applied</label><input class="irr-in" type="number" inputmode="decimal" placeholder="Enter gallons" value="${esc(st.qty)}" oninput="st.qty=this.value">`;
  const lateCls=(q.dueStatus==='OVERDUE')?'late':(q.offSchedule?'amber':'ok');
  const lateIc=lateCls==='late'?'\u26a0\ufe0f':(lateCls==='amber'?'\u2139\ufe0f':'\u2705');
- const pz=(e&&e.data&&e.data.plannedZone)||{}; const pzVerified=!!pz.physicallyVerified; const opsOk=!!pz.operatingValuesApproved;
-const hasG=q.targetGallons!=null&&pzVerified;
+ const hasG=q.targetGallons!=null;
  const hero=hasG?`<div class="t">${q.estimated?'Estimated water:':'Apply:'}</div><div class="n">${esc(q.targetGallons)} gal</div>${q.estimated?'<div class="c">Estimate from bed size and crop need, not a verified target</div>':''}`:`<div class="t">Apply:</div><div class="n" style="font-size:20px;">${na('Not calculated')}</div>`;
  const perBed=hasG?(q.estimated?`<div class="irr-al amber"><span class="ic">\u2757</span><div><div class="h">Per-bed target: <span>Not verified</span></div>Ask your manager before using a gallon target.</div></div>`:`<div class="irr-al ok"><span class="ic">\u2705</span><div><b>Per-bed target: Verified</b></div></div>`):'';
  return `<div class="irr-card2">
   <div class="irr-est"><span class="drop">\ud83d\udca7</span><div class="body">${hero}</div>${reload}</div>
   ${irrSafetyPills_(e&&e.data)}
-  <div class="irr-stats"><div><div class="k">Planned zone</div><div class="v">${pz.zoneId?esc(pz.zoneId):na('Not assigned')}</div></div><div><div class="k">Pressure</div><div class="v">${opsOk&&q.targetPsi!=null?esc(q.targetPsi)+' PSI':na('Not approved for operational use')}</div></div><div><div class="k">Shift</div><div class="v">${opsOk?shiftTxt:na('Not approved for operational use')}</div></div><div><div class="k">Target Depth</div><div class="v">${depthTxt}</div></div></div>
+  <div class="irr-stats"><div><div class="k">Zone</div><div class="v">${q.zoneId?esc(q.zoneId):na('Not assigned')}</div></div><div><div class="k">Pressure</div><div class="v">${q.targetPsi!=null?esc(q.targetPsi)+' PSI':na('Not set')}</div></div><div><div class="k">Shift</div><div class="v">${shiftTxt}</div></div><div><div class="k">Target Depth</div><div class="v">${depthTxt}</div></div></div>
   <div class="irr-al ${lateCls}"><span class="ic">${lateIc}</span><div>${esc(dueTxt)}${seq}</div></div>
-  <div class="irr-al amber"><span class="ic">\u26a0\ufe0f</span><div><b>Physical verification: ${pzVerified?'Verified':'Not verified'}.</b> Confirm the correct valve with your manager before opening. Do not open any valve until you have confirmed it.<br>Runtime: ${pzVerified&&opsOk?'available from the manager calendar':'Not calculated until valid operating inputs are available'}.</div></div>
   <div class="irr-al info"><span class="ic">\u2139\ufe0f</span><div>Do not change the zone or schedule yourself. <b>Watch for leaks, pooling,</b> runoff or pressure drops, and tell your manager if you see any.</div></div>
   ${perBed}
   ${notes.map(n=>`<div class="irr-r sub" style="margin-top:6px;">\u2022 ${esc(n)}</div>`).join('')}
@@ -1280,6 +1290,7 @@ function renderHome(){
       <div class="row">
         ${s.status==='active'?`<button class="btn secondary" ${st.busy?'disabled':''} onclick="openPause('${s.id}')">Pause</button>`
           :`<button class="btn secondary" ${st.busy?'disabled':''} onclick="resumeS('${s.id}')">${st.busy?'Resuming…':'Resume'}</button>`}
+        <button class="btn secondary" ${st.busy?'disabled':''} onclick="stopTask('${s.id}')">Stop</button>
         <button class="btn warn" onclick="openComplete('${s.id}')">Complete</button>
       </div>`}
     </div>`;}).join('')}
