@@ -928,14 +928,25 @@ async function iztSubmit_(id){
 }
 function fertLine_(s){const f=s&&s.fert;if(!f)return '';const row=(k,v)=>v===''||v==null?'':`<div class="sub"><b>${k}:</b> ${esc(v)}</div>`;const org=f.organic==='ORGANIC'?'Organic':f.organic==='NON_ORGANIC'?'Non-organic':f.organic;return `<div style="margin-top:6px;padding:6px 8px;border:1px solid #bcd6bf;border-radius:8px;background:#EEF5EE;"><div class="sub" style="font-weight:700;">Fertilizer to apply</div>${row('Type',f.type)}${row('Brand',f.brand)}${row('Quantity',(f.qty!==''?f.qty:'')+(f.unit?' '+f.unit:''))}${row('Organic',org)}${row('Method',f.method)}${row('Notes',f.notes)}</div>`;}
 function openComplete(id){if(st.pending[id])return;st.completingId=id;st.qty=isIrrigation_(st.sessions.find(x=>x.id===id)||{})?st.qty:'';st.unit=(st.sessions.find(x=>x.id===id)||{}).unit||'';st.notes='';st.valveOk=false;st.overrunReason='';st.isFinal=false;st.grade='';st.coldChain='';st.bedScan=null;st.bedScanRaw='';st.intakeIn='';st.scanBusy=false;
- const _cs=st.sessions.find(x=>x.id===id)||{};st.scoutNote=null;st.sc={domain:SCOUT_ACT_DOMAIN_UI_[_cs.activityName]||'PlantCondition',severity:'MEDIUM',symptom:'',requiresAction:false,noIssues:false};st.app={product:'',qty:''};render();}
+ const _cs=st.sessions.find(x=>x.id===id)||{};st.scoutNote=null;st.sc={domain:SCOUT_ACT_DOMAIN_UI_[_cs.activityName]||'PlantCondition',severity:'MEDIUM',symptom:'',requiresAction:false,noIssues:false};st.app={product:'',qty:''};render();irrLoadValveReq_(_cs);}
 /* ================= ACT_031 Irrigation: valve gate, cutoff clock, overrun reason, safety pills (step 3) =================
    Server fields from get-irrigation-session-context (optional; a missing field shows nothing and never blocks):
      requirement.cutoffAt  ISO time the worker must be at the bed to shut the water off
      safety {waterQuality:'CLEAR'|'HOLD', phiDays, openTickets}                                                    */
 function irrCutoffMs_(s){const c=st.irrCtx[s.id],r=c&&c.data&&c.data.requirement;const t=r&&r.cutoffAt?Date.parse(r.cutoffAt):NaN;return isNaN(t)?null:t;}
 function irrOverrun_(s){const t=irrCutoffMs_(s);return t!=null&&Date.now()>t+60000;}
-function irrBlockComplete_(s){if(!isIrrigation_(s))return false;return !st.valveOk||(irrOverrun_(s)&&!String(st.overrunReason||'').trim());}
+function irrValveNeeded_(s){const v=st.valveReq&&st.valveReq[s.id];return !v||!v.loaded||!!v.required;}
+function irrLoadValveReq_(s){
+ if(!isIrrigation_(s)||!s.bedId)return;
+ st.valveReq=st.valveReq||{};
+ const failSafe=()=>{st.valveReq[s.id]={loaded:false,required:true};};
+ api('get-irrigation-field-reference',{bedId:s.bedId}).then(r=>{
+  if(r&&r.ok&&r.data&&typeof r.data.valveChangeRequired==='boolean'){st.valveReq[s.id]={loaded:true,required:r.data.valveChangeRequired,reason:r.data.valveReason||''};}
+  else failSafe();
+  render();
+ }).catch(()=>{failSafe();render();});
+}
+function irrBlockComplete_(s){if(!isIrrigation_(s))return false;return (irrValveNeeded_(s)&&!st.valveOk)||(irrOverrun_(s)&&!String(st.overrunReason||'').trim());}
 function irrSafetyPills_(data){
  const sf=data&&data.safety;if(!sf)return '';
  const pill=(t,bg)=>`<span class="irr-pill" style="background:${bg};color:#fff;margin:2px 4px 2px 0;">${t}</span>`;
@@ -950,13 +961,14 @@ function irrGateHtml_(s){
  const id=esc(s.id),t=irrCutoffMs_(s),over=irrOverrun_(s);
  const cut=t!=null?`<div class="irr-r"><b>Shut off by:</b> ${esc(new Date(t).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}))} at the bed</div>`:'';
  const ov=over?`<div class="banner">Running past the cutoff. Enter why before finishing.</div><label>Overrun reason (required)</label><input type="text" maxlength="300" value="${esc(st.overrunReason||'')}" oninput="st.overrunReason=this.value">`:'';
- return `<div class="valve-box">${cut}<div class="chk"><input type="checkbox" id="valveChk-${id}" ${st.valveOk?'checked':''} onchange="st.valveOk=this.checked;render()"><label for="valveChk-${id}" style="margin:0;color:var(--text);font-size:16px;">I closed this bed's manual lateral ball valve</label></div>${ov}</div>`;
+ const valveBox=irrValveNeeded_(s)?`<div class="chk"><input type="checkbox" id="valveChk-${id}" ${st.valveOk?'checked':''} onchange="st.valveOk=this.checked;render()"><label for="valveChk-${id}" style="margin:0;color:var(--text);font-size:16px;">I closed this bed's manual lateral ball valve</label></div>`:`<div class="sub" style="margin:0;">No lateral valve change is needed for routine watering on this bed.</div>`;
+ return `<div class="valve-box">${cut}${valveBox}${ov}</div>`;
 }
 async function confirmComplete(id){
  const s=st.sessions.find(x=>x.id===id);if(!s||st.pending[id])return;
  if(s.activityId==='ACT_018'&&!(Number(st.qty)>0)){st.cardErr[id]='Enter how much was harvested before finishing.';render();return;}
  if((s.activityId==='ACT_031'||s.activityName==='Irrigation')&&!(Number(st.qty)>0)){st.cardErr[id]='Enter the gallons applied before finishing.';render();return;}
- if(isIrrigation_(s)&&!st.valveOk){st.cardErr[id]='Confirm that you closed the lateral valve before finishing.';render();return;}
+ if(isIrrigation_(s)&&irrValveNeeded_(s)&&!st.valveOk){st.cardErr[id]='Confirm that you closed the lateral valve before finishing.';render();return;}
  if(isIrrigation_(s)&&irrOverrun_(s)&&!String(st.overrunReason||'').trim()){st.cardErr[id]='Enter the overrun reason before finishing.';render();return;}
  if(s.activityId==='ACT_018'&&st.coldChain!=='yes'&&st.coldChain!=='no'){st.cardErr[id]='Answer the cold-chain question (Yes or No) before finishing.';render();return;}
  if(s.activityId==='ACT_018'&&st.bedScan&&!st.bedScan.ok){st.cardErr[id]=st.bedScan.msg;render();return;}
@@ -1133,7 +1145,7 @@ function tabsHtml_(active){
  const n=st.sessions.filter(s=>s.status==='completed'&&st.flash[s.id]!=='completed').length;
  return `<div class="tabs">
   <div class="tab ${active==='home'?'on':''}" onclick="go('home')"><span class="ti">🌱</span>Sessions</div>
-  <div class="tab ${active==='log'?'on':''}" onclick="go('log');syncActiveSessions_(true)"><span class="ti">📄</span>Log${n?' ('+n+')':''}</div>${phOK_()?`<div class="tab ${active==='packhouse'?'on':''}" onclick="go('packhouse')"><span class="ti">📦</span>Packhouse</div>`:''}</div>`;
+  <div class="tab ${active==='log'?'on':''}" onclick="go('log');syncActiveSessions_(true)"><span class="ti">📄</span>Log${n?' ('+n+')':''}</div>${phOK_()?`<div class="tab ${active==='packhouse'?'on':''}" onclick="go('packhouse')"><span class="ti">📦</span>Packhouse</div>`:''}<div class="tab ${active==='maint'?'on':''}" onclick="go('maint')"><span class="ti">🔧</span>Maint.</div></div>`;
 }
 
 /* ---- Log tab: completed tasks, filtered ---- */
@@ -1189,6 +1201,109 @@ function logListHtml_(){
 }
 function onLogQuery(v){st.logQuery=v;const el=document.getElementById('logList');if(el)el.innerHTML=logListHtml_();}
 function setLog_(k,v){st[k]=v;render();}
+/* ---- Zone perimeter card: DESIGN / PLAN data from get-irrigation-field-reference. It never confirms physical installation. ---- */
+const MNT_ZONES_=['IRR-Z01','IRR-Z02','IRR-Z03','IRR-Z04','IRR-Z05','IRR-Z06','IRR-Z07'];
+const MNT_EVENTS_=['FILTER_BACKWASH','LINE_FLUSH','PRESSURE_DROP','VALVE_REPAIR','EMITTER_CLOG','OTHER'];
+const MNT_SEV_=['INFO','WARN','OUT_OF_SERVICE'];
+function perimEnsure_(bedId){
+ const id=String(bedId||'').trim().toUpperCase(); if(!id) return;
+ st.perim=st.perim||{};
+ if(st.perim[id]) return;
+ st.perim[id]={loading:true};
+ api('get-irrigation-field-reference',{bedId:id}).then(r=>{
+  st.perim[id]=(r&&r.ok&&r.data)?{loading:false,data:r.data}:{loading:false,err:(r&&(r.error||r.code))||'Could not load the zone reference.'};
+  if(st.screen==='assignment')render();
+ }).catch(()=>{st.perim[id]={loading:false,err:'Could not load the zone reference.'};if(st.screen==='assignment')render();});
+}
+function perimeterCardHtml_(bedId){
+ const id=String(bedId||'').trim().toUpperCase(); if(!id) return '';
+ perimEnsure_(id);
+ const p=(st.perim||{})[id];
+ const head='<div style="font-weight:700;margin-bottom:4px;">Zone reference · bed '+esc(id)+'</div>';
+ const note='<div class="sub" style="margin-bottom:6px;">Plan and design data only. It does not confirm what is installed on site.</div>';
+ if(!p||p.loading) return `<div class="card">${head}<div class="sub">Loading zone reference…</div></div>`;
+ if(p.err) return `<div class="card">${head}<div class="sub">${esc(p.err)}</div></div>`;
+ const d=p.data||{}, f=d.reference||{}, rel=d.release||{};
+ const swatch=f.colorCode?`<span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;margin-right:6px;border:1px solid #0002;background:${esc(f.colorCode)};"></span>`:'';
+ const basisTxt=f.basis==='PLANNED'?'Planned zone':f.basis==='LAYOUT_REFERENCE'?'Layout reference (no planned zone yet)':esc(f.basis||'—');
+ let ver;
+ if(!f.physicallyVerified) ver='Not physically verified. The zone is from the plan only.';
+ else if(f.matchesReferenceZone) ver='Physically verified in '+esc(f.physicalZoneId)+', matching the plan.';
+ else ver='Conflict: the physical record says '+esc(f.physicalZoneId)+' but the plan says '+esc(f.zoneId)+'. Report this to the manager.';
+ const relTxt=rel.released?'Zone released (ACT_013 sign-off on file)':'Zone not released: no ACT_013 sign-off on file';
+ const prod=f.isProduction===false?'<div class="banner">Not a production crop bed. Do not irrigate crops here.</div>':'';
+ const row=(k,v)=>`<div class="sub"><b>${k}:</b> ${v}</div>`;
+ return `<div class="card">${head}${note}${prod}
+  <div style="margin-bottom:6px;">${swatch}<b>${esc(f.zoneId||'—')}</b>${f.fieldMarker?' · '+esc(f.fieldMarker):''}</div>
+  ${row('Valve box',esc(f.assembly||'—'))}
+  ${row('Channel',esc(f.channel||'—'))}
+  ${row('Flush bed',esc(f.flushBed||'—'))}
+  ${row('Design PSI (reference only, not a commissioned setpoint)',f.targetPsi!=null&&f.targetPsi!==''?esc(f.targetPsi):'—')}
+  ${row('Basis',basisTxt)}
+  ${row('Physical verification',ver)}
+  ${row('Release',relTxt)}
+ </div>`;
+}
+
+/* ---- Maintenance report: log-zone-maintenance (append-only ZONE_MAINTENANCE_LOG). Never writes BED_MASTER.Zone, never triggers ACT_013. ---- */
+function mntD_(){ st.maint=st.maint||{zone:'',eventType:'',severity:'INFO',beds:'',psi:'',downtime:'',notes:'',fixed:false,resolution:'',busy:false,msg:'',ok:false}; return st.maint; }
+function renderMaint(){
+ const m=mntD_();
+ const opts=(arr,cur,ph)=>`<option value="">${ph}</option>`+arr.map(v=>`<option value="${v}" ${cur===v?'selected':''}>${v}</option>`).join('');
+ return `${header()}
+ ${tabsHtml_('maint')}
+ <h1>Report Maintenance</h1>
+ <div class="card">
+  <label>Zone</label>
+  <select onchange="mntD_().zone=this.value">${opts(MNT_ZONES_,m.zone,'Choose the zone')}</select>
+  <label>Fault / event type</label>
+  <select onchange="mntD_().eventType=this.value">${opts(MNT_EVENTS_,m.eventType,'Choose the type')}</select>
+  <label>Severity</label>
+  <select onchange="mntD_().severity=this.value">${MNT_SEV_.map(v=>`<option value="${v}" ${m.severity===v?'selected':''}>${v}</option>`).join('')}</select>
+  <label>Affected beds (comma-separated, optional)</label>
+  <input type="text" maxlength="200" value="${esc(m.beds)}" oninput="mntD_().beds=this.value">
+  <label>Observed header PSI (optional)</label>
+  <input type="number" inputmode="decimal" min="0" value="${esc(m.psi)}" oninput="mntD_().psi=this.value">
+  <label>Downtime (min, optional)</label>
+  <input type="number" inputmode="numeric" min="0" value="${esc(m.downtime)}" oninput="mntD_().downtime=this.value">
+  <label>Description</label>
+  <textarea maxlength="500" oninput="mntD_().notes=this.value">${esc(m.notes)}</textarea>
+  <label style="display:flex;gap:8px;align-items:center;"><input type="checkbox" ${m.fixed?'checked':''} onchange="mntD_().fixed=this.checked;render()"> Already fixed</label>
+  ${m.fixed?`<label>Resolution</label><textarea maxlength="500" oninput="mntD_().resolution=this.value">${esc(m.resolution)}</textarea>`:''}
+  ${m.msg?`<div class="${m.ok?'sub':'banner'}" style="margin:8px 0;">${esc(m.msg)}</div>`:''}
+  <button ${m.busy?'disabled':''} onclick="mntSubmit_()">${m.busy?'Sending…':'Submit report'}</button>
+ </div>`;
+}
+async function mntSubmit_(){
+ const m=mntD_();
+ const bad=(msg)=>{m.msg=msg;m.ok=false;render();};
+ if(!m.zone) return bad('Choose the zone.');
+ if(!m.eventType) return bad('Choose the fault or event type.');
+ const psi=String(m.psi).trim(), dt=String(m.downtime).trim();
+ if(psi!==''&&!(isFinite(Number(psi))&&Number(psi)>=0)) return bad('Observed PSI must be a number.');
+ if(dt!==''&&!(isFinite(Number(dt))&&Number(dt)>=0)) return bad('Downtime must be a number of minutes.');
+ if(m.fixed&&!String(m.resolution).trim()) return bad('Describe the resolution.');
+ const now=new Date(), pad=n=>String(n).padStart(2,'0');
+ const logDate=now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate());
+ const desc=String(m.notes||'').trim(), res=String(m.resolution||'').trim();
+ const payload={zoneId:m.zone,eventType:m.eventType,severity:m.severity||'INFO',status:m.fixed?'RESOLVED':'OPEN',logDate:logDate,startTimestamp:now.toISOString(),
+  notes:m.fixed?((desc?desc+' · ':'')+'Resolution: '+res):desc};
+ const beds=String(m.beds||'').split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+ if(beds.length) payload.bedIds=beds;
+ if(psi!=='') payload.operatingPsiObserved=Number(psi);
+ if(dt!=='') payload.downtimeMinutes=Number(dt);
+ if(m.fixed) payload.resolvedTimestamp=now.toISOString();
+ m.busy=true;m.msg='';render();
+ let r; try{ r=await api('log-zone-maintenance',payload); }catch(e){ r={ok:false,error:'Network error. Report not saved.'}; }
+ if(handleAuthError(r)){ m.busy=false; render(); return; }
+ m.busy=false;
+ if(r&&r.ok){
+  const d=r.data||{};
+  m.ok=true; m.msg='Report saved as '+(d.maintenanceId||'a new ticket')+'. Status: '+(d.status||payload.status)+'.';
+  m.beds='';m.psi='';m.downtime='';m.notes='';m.resolution='';m.fixed=false;
+ } else { m.ok=false; m.msg=(r&&(r.error||r.code))||'Report not saved. Try again.'; }
+ render();
+}
 function renderLog(){
  const rows=doneRows_();
  const acts=Array.from(new Set(rows.map(s=>s.activityName).filter(Boolean))).sort();
@@ -1276,7 +1391,7 @@ function renderHome(){
         <button class="btn secondary" onclick="st.completingId=null;render()">Cancel</button>
         <button class="btn ${isIrrigation_(s)?'conf':'warn'}" ${irrBlockComplete_(s)?'disabled':''} onclick="confirmComplete('${s.id}')">${isIrrigation_(s)?'Confirm complete':'Confirm Complete'}</button>
       </div>
-      ${irrBlockComplete_(s)?`<div class="dis-hint">${!st.valveOk?'Tick the valve box to finish.':'Enter the overrun reason to finish.'}</div>`:''}`:pausing?`
+      ${irrBlockComplete_(s)?`<div class="dis-hint">${(irrValveNeeded_(s)&&!st.valveOk)?'Tick the valve box to finish.':'Enter the overrun reason to finish.'}</div>`:''}`:pausing?`
       <label style="margin-top:8px;">Pause type</label>
       <div class="row" style="flex-wrap:wrap;gap:6px;">
         ${PAUSE_TYPES.map(t=>`<button class="btn secondary" style="flex:none;${st.pauseReason===t?'font-weight:700;text-decoration:underline;':''}" onclick="st.pauseReason='${t}';render()">${esc(t)}</button>`).join('')}
@@ -1346,6 +1461,7 @@ function renderAssignment(){
  return `${header()}
  <p class="link" onclick="go('scan')" style="margin-top:0;">‹ Cancel / Rescan</p>
  <h1>Confirm Assignment</h1>
+ ${perimeterCardHtml_(st.selBed)}
  <div class="card">
   <div style="font-weight:700;font-size:16px;">📍 Bed ${esc(d.bedId)} <span class="sub" style="font-weight:400;">(Block ${esc(d.block)}${d.zone?' · Zone '+esc(d.zone):''})</span></div>
   <div class="detail-row">🌱 Crop: ${d.cropName?esc(d.cropName):(d.live?'No crop assigned':'—')}</div>
@@ -1653,6 +1769,7 @@ function render(){
  else if(st.screen==='scan')el.innerHTML=renderScan();
  else if(st.screen==='assignment')el.innerHTML=renderAssignment();
  else if(st.screen==='packhouse')el.innerHTML=renderPackhouse();
+else if(st.screen==='maint')el.innerHTML=renderMaint();
  if(st.lotSticker&&st.screen!=='login')el.insertAdjacentHTML('beforeend',stickerOverlay_());
  if(st.scout&&st.screen!=='login')el.insertAdjacentHTML('beforeend',scoutOverlay_());
  if(st.screen==='packhouse'){phMount();if(PHW.label)el.insertAdjacentHTML('beforeend',phLabelOverlay());}
@@ -1663,3 +1780,4 @@ render();
 </script>
 </body>
 </html>
+
