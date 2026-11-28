@@ -1230,7 +1230,7 @@ function perimeterCardHtml_(bedId){
  if(!f.physicallyVerified) ver='Not physically verified. The zone is from the plan only.';
  else if(f.matchesReferenceZone) ver='Physically verified in '+esc(f.physicalZoneId)+', matching the plan.';
  else ver='Conflict: the physical record says '+esc(f.physicalZoneId)+' but the plan says '+esc(f.zoneId)+'. Report this to the manager.';
- const relTxt=rel.released?'Zone released (ACT_013 sign-off on file)':'Zone not released: no ACT_013 sign-off on file';
+ const relTxt=rel.released?'Zone released (commissioned)':'Zone not released (not yet commissioned)';
  const prod=f.isProduction===false?'<div class="banner">Not a production crop bed. Do not irrigate crops here.</div>':'';
  const row=(k,v)=>`<div class="sub"><b>${k}:</b> ${v}</div>`;
  return `<div class="card">${head}${note}${prod}
